@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
 import {
   ChannelType,
@@ -79,6 +80,17 @@ const client = new Client({
 });
 const tts = new VoicevoxClient(config.voicevoxUrl, config.defaultSpeakerId);
 const player = createAudioPlayer();
+const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
+let voiceClips = { join: null, leave: null };
+try {
+  const encodedClips = JSON.parse(readFileSync(voiceClipsPath, "utf8"));
+  voiceClips = {
+    join: Buffer.from(encodedClips.join ?? "", "base64"),
+    leave: Buffer.from(encodedClips.leave ?? "", "base64"),
+  };
+} catch (error) {
+  console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
+}
 const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
 let connection = null;
@@ -94,8 +106,13 @@ const alphabetNames = {
 function replaceLinks(text) {
   const mode = guildSettings.linkSpeechMode;
   if (mode === "keep") return text;
+  if (mode === "omit") {
+    return text
+      .replace(/\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/giu, "リンク省略")
+      .replace(/<((?:https?:\/\/|www\.)[^>]+)>/giu, "リンク省略")
+      .replace(/(?:https?:\/\/|www\.)[^\s<>]+/giu, "リンク省略");
+  }
   const toSpeech = (url) => {
-    if (mode === "omit") return "";
     const cleaned = url.replace(/[.,!?;:、。！？）)]+$/u, "");
     try {
       const parsed = new URL(cleaned.startsWith("www.") ? `https://${cleaned}` : cleaned);
@@ -122,7 +139,7 @@ function normalizeForSpeech(input) {
   return text.trim().slice(0, config.maxMessageChars);
 }
 
-function enqueueText({ text, authorId, receivedAt = Date.now() }) {
+function enqueueText({ text, authorId, receivedAt = Date.now(), audioClips = [] }) {
   const normalized = normalizeForSpeech(text);
   if (!normalized) return { accepted: false, position: null, reason: "empty" };
   const preference = voicePreferencesByUser.get(authorId) ?? {};
@@ -136,6 +153,7 @@ function enqueueText({ text, authorId, receivedAt = Date.now() }) {
     receivedAt,
     speakerId: isSupiki ? config.supikiSpeakerId : (preference.speakerId ?? config.defaultSpeakerId),
     voiceSettings,
+    audioClips,
   });
 }
 
@@ -207,8 +225,13 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (wasInTarget === isInTarget) return;
   const member = isInTarget ? newState.member : oldState.member;
   if (!member || member.user.bot) return;
-  const action = isInTarget ? "参加しました" : "退出しました";
-  enqueueText({ text: `${member.displayName.replace(/@/g, "アット")}さんが${action}。`, authorId: member.id });
+    const name = member.displayName.replace(/@/g, "アット");
+    const isJoining = isInTarget;
+    enqueueText({
+      text: isJoining ? `${name}さんが来ました。` : `${name}さんが退出しました。`,
+      authorId: member.id,
+      audioClips: [isJoining ? voiceClips.join : voiceClips.leave].filter((clip) => clip?.length),
+    });
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -409,3 +432,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
+
