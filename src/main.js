@@ -149,22 +149,34 @@ function normalizeForSpeech(input) {
   return text.trim().slice(0, config.maxMessageChars);
 }
 
-function enqueueText({ text, authorId, receivedAt = Date.now(), audioClips = [] }) {
-  const normalized = normalizeForSpeech(text);
-  if (!normalized) return { accepted: false, position: null, reason: "empty" };
+function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
+  const normalizedSegments = segments.flatMap((segment) => {
+    if (segment.type === "text") {
+      const text = normalizeForSpeech(segment.text);
+      return text ? [{ type: "text", text }] : [];
+    }
+    if (segment.type === "audio" && segment.buffer?.length) return [segment];
+    return [];
+  });
+  const text = normalizedSegments.filter((segment) => segment.type === "text").map((segment) => segment.text).join(" ");
+  if (!text) return { accepted: false, position: null, reason: "empty" };
   const preference = voicePreferencesByUser.get(authorId) ?? {};
   const isSupiki = supikiUsers.has(authorId);
   const voiceSettings = isSupiki
     ? config.supikiVoiceSettings
     : Object.fromEntries(["speedScale", "pitchScale", "intonationScale"].filter((key) => Number.isFinite(preference[key])).map((key) => [key, preference[key]]));
   return queue.enqueue({
-    text: normalized,
+    text,
+    segments: normalizedSegments,
     authorId,
     receivedAt,
     speakerId: isSupiki ? config.supikiSpeakerId : (preference.speakerId ?? config.defaultSpeakerId),
     voiceSettings,
-    audioClips,
   });
+}
+
+function enqueueText({ text, authorId, receivedAt = Date.now() }) {
+  return enqueueSegments({ segments: [{ type: "text", text }], authorId, receivedAt });
 }
 
 async function connectTo(channel) {
@@ -235,13 +247,17 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (wasInTarget === isInTarget) return;
   const member = isInTarget ? newState.member : oldState.member;
   if (!member || member.user.bot) return;
-    const name = member.displayName.replace(/@/g, "アット");
-    const isJoining = isInTarget;
-    enqueueText({
-      text: isJoining ? `${name}さんが来ました。` : `${name}さんが退出しました。`,
-      authorId: member.id,
-      audioClips: [isJoining ? voiceClips.join : voiceClips.leave].filter((clip) => clip?.length),
-    });
+  const name = member.displayName.replace(/@/g, "アット");
+  const isJoining = isInTarget;
+  const clip = isJoining ? voiceClips.join : voiceClips.leave;
+  const segments = clip?.length
+    ? [
+        { type: "text", text: `${name}さんが` },
+        { type: "audio", buffer: clip },
+        { type: "text", text: isJoining ? "しにきました。" : "しました。" },
+      ]
+    : [{ type: "text", text: isJoining ? `${name}さんが来ました。` : `${name}さんが退出しました。` }];
+  enqueueSegments({ segments, authorId: member.id });
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
