@@ -271,6 +271,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       await interaction.deferReply();
       await connectTo(channel);
+      enqueueText({ text: "接続しました。", authorId: interaction.user.id });
       await interaction.editReply(`${channel.name} に接続しました。設定した読み上げ元チャンネルの投稿を読み上げます。`);
       return;
     }
