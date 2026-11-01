@@ -24,6 +24,11 @@ jobs:
       GUILD_ID: ${{ vars.GUILD_ID }}
       TEXT_CHANNEL_IDS: ${{ vars.TEXT_CHANNEL_IDS }}
       VOICEVOX_SPEAKER_ID: ${{ vars.VOICEVOX_SPEAKER_ID }}
+      SUPIKI_TTS_PROVIDER: ${{ vars.SUPIKI_TTS_PROVIDER }}
+      GPT_SOVITS_URL: ${{ vars.GPT_SOVITS_URL }}
+      GPT_SOVITS_REF_AUDIO_PATH: ${{ vars.GPT_SOVITS_REF_AUDIO_PATH }}
+      GPT_SOVITS_REF_TEXT: ${{ vars.GPT_SOVITS_REF_TEXT }}
+      GPT_SOVITS_TIMEOUT_MS: ${{ vars.GPT_SOVITS_TIMEOUT_MS }}
     steps:
       - uses: actions/checkout@v6
 
@@ -39,6 +44,11 @@ jobs:
           test -n "$CLIENT_ID"
           test -n "$GUILD_ID"
           test -n "$TEXT_CHANNEL_IDS"
+          if [ "${SUPIKI_TTS_PROVIDER:-voicevox}" = "gpt-sovits" ]; then
+            test -n "$GPT_SOVITS_URL"
+            test -n "$GPT_SOVITS_REF_AUDIO_PATH"
+            test -n "$GPT_SOVITS_REF_TEXT"
+          fi
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
@@ -49,8 +59,10 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          printf 'DISCORD_TOKEN=%s\nCLIENT_ID=%s\nGUILD_ID=%s\nTEXT_CHANNEL_IDS=%s\nVOICEVOX_SPEAKER_ID=%s\n' \
+          printf 'DISCORD_TOKEN=%s\nCLIENT_ID=%s\nGUILD_ID=%s\nTEXT_CHANNEL_IDS=%s\nVOICEVOX_SPEAKER_ID=%s\nSUPIKI_TTS_PROVIDER=%s\nGPT_SOVITS_URL=%s\nGPT_SOVITS_REF_AUDIO_PATH=%s\nGPT_SOVITS_REF_TEXT=%s\nGPT_SOVITS_TIMEOUT_MS=%s\n' \
             "$DISCORD_TOKEN" "$CLIENT_ID" "$GUILD_ID" "$TEXT_CHANNEL_IDS" "${VOICEVOX_SPEAKER_ID:-1}" \
+            "${SUPIKI_TTS_PROVIDER:-voicevox}" "${GPT_SOVITS_URL:-}" "${GPT_SOVITS_REF_AUDIO_PATH:-}" \
+            "${GPT_SOVITS_REF_TEXT:-}" "${GPT_SOVITS_TIMEOUT_MS:-60000}" \
             > "$RUNNER_TEMP/discord-tts.env"
 
       - name: Copy files and restart services
@@ -60,7 +72,7 @@ jobs:
           remote="$VPS_USER@$VPS_HOST"
           ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" 'mkdir -p /opt/discord-tts-bot'
           rsync -az --delete \
-            --exclude='.git' --exclude='.env' --exclude='node_modules' \
+            --exclude='.git' --exclude='.env' --exclude='node_modules' --exclude='.bot-settings.json' \
             -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
             ./ "$remote:/opt/discord-tts-bot/"
           scp -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes \
@@ -73,4 +85,5 @@ jobs:
         shell: bash
         run: |
           rm -f "$RUNNER_TEMP/discord-tts.env" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
 
