@@ -13,9 +13,9 @@ export class SpeechQueue {
     this.busy = false;
   }
 
-  enqueue({ text, speakerId, voiceSettings = {}, authorId, audioClips = [], receivedAt = Date.now() }) {
+  enqueue({ text, segments = [{ type: "text", text }], speakerId, voiceSettings = {}, authorId, receivedAt = Date.now() }) {
     if (this.items.length >= this.maxItems) return { accepted: false, position: null };
-    this.items.push({ text, speakerId, voiceSettings, authorId, audioClips, receivedAt });
+    this.items.push({ text, segments, speakerId, voiceSettings, authorId, receivedAt });
     const position = this.items.length + (this.current ? 1 : 0);
     void this.pump();
     return { accepted: true, position };
@@ -44,26 +44,26 @@ export class SpeechQueue {
       while (this.items.length > 0) {
         const item = this.items.shift();
         this.current = item;
-        const synthesisStartedAt = Date.now();
-        let audio;
-        try {
-          audio = await this.tts.synthesize(item.text, item.speakerId, item.voiceSettings);
-        } catch (error) {
-          this.onError(error);
-          continue;
-        }
-        if (item.cancelled) continue;
-        const synthesisFinishedAt = Date.now();
         const metrics = {
-          queueWaitMs: synthesisStartedAt - item.receivedAt,
-          synthesisMs: synthesisFinishedAt - synthesisStartedAt,
+          queueWaitMs: Date.now() - item.receivedAt,
+          synthesisMs: 0,
           playbackStartMs: null,
         };
-
-        const sequence = [audio, ...item.audioClips];
-        for (let index = 0; index < sequence.length; index += 1) {
+        for (const segment of item.segments) {
           if (item.cancelled) break;
-          const started = await this.playBuffer(sequence[index], item, metrics, index === 0);
+          let buffer = segment.buffer;
+          if (segment.type === "text") {
+            const synthesisStartedAt = Date.now();
+            try {
+              buffer = await this.tts.synthesize(segment.text, item.speakerId, item.voiceSettings);
+            } catch (error) {
+              this.onError(error);
+              break;
+            }
+            metrics.synthesisMs += Date.now() - synthesisStartedAt;
+          }
+          if (!buffer?.length || item.cancelled) continue;
+          const started = await this.playBuffer(buffer, item, metrics, metrics.playbackStartMs === null);
           if (!started) break;
         }
         this.current = null;
@@ -106,4 +106,5 @@ export class SpeechQueue {
     });
   }
 }
+
 
