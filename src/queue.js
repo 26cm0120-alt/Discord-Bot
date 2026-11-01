@@ -13,9 +13,9 @@ export class SpeechQueue {
     this.busy = false;
   }
 
-  enqueue({ text, speakerId, authorId, receivedAt = Date.now() }) {
+  enqueue({ text, speakerId, voiceSettings = {}, authorId, audioClips = [], receivedAt = Date.now() }) {
     if (this.items.length >= this.maxItems) return { accepted: false, position: null };
-    this.items.push({ text, speakerId, authorId, receivedAt });
+    this.items.push({ text, speakerId, voiceSettings, authorId, audioClips, receivedAt });
     const position = this.items.length + (this.current ? 1 : 0);
     void this.pump();
     return { accepted: true, position };
@@ -47,7 +47,7 @@ export class SpeechQueue {
         const synthesisStartedAt = Date.now();
         let audio;
         try {
-          audio = await this.tts.synthesize(item.text, item.speakerId);
+          audio = await this.tts.synthesize(item.text, item.speakerId, item.voiceSettings);
         } catch (error) {
           this.onError(error);
           continue;
@@ -60,31 +60,12 @@ export class SpeechQueue {
           playbackStartMs: null,
         };
 
-        await new Promise((resolve) => {
-          let settled = false;
-          const finish = () => {
-            if (settled) return;
-            settled = true;
-            this.player.off(AudioPlayerStatus.Playing, onPlaying);
-            this.player.off(AudioPlayerStatus.Idle, onIdle);
-            this.player.off("error", onError);
-            resolve();
-          };
-          const onPlaying = () => {
-            metrics.playbackStartMs = Date.now() - item.receivedAt;
-            this.onMetric(metrics);
-          };
-          const onIdle = () => finish();
-          const onError = (error) => {
-            this.onError(error);
-            finish();
-          };
-
-          this.player.once(AudioPlayerStatus.Playing, onPlaying);
-          this.player.once(AudioPlayerStatus.Idle, onIdle);
-          this.player.once("error", onError);
-          this.player.play(createAudioResource(Readable.from(audio)));
-        });
+        const sequence = [audio, ...item.audioClips];
+        for (let index = 0; index < sequence.length; index += 1) {
+          if (item.cancelled) break;
+          const started = await this.playBuffer(sequence[index], item, metrics, index === 0);
+          if (!started) break;
+        }
         this.current = null;
       }
     } finally {
@@ -92,4 +73,37 @@ export class SpeechQueue {
       this.busy = false;
     }
   }
+
+  playBuffer(buffer, item, metrics, reportStart) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let started = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        this.player.off(AudioPlayerStatus.Playing, onPlaying);
+        this.player.off(AudioPlayerStatus.Idle, onIdle);
+        this.player.off("error", onError);
+        resolve(started);
+      };
+      const onPlaying = () => {
+        if (!started && reportStart) {
+          metrics.playbackStartMs = Date.now() - item.receivedAt;
+          this.onMetric(metrics);
+        }
+        started = true;
+      };
+      const onIdle = () => finish();
+      const onError = (error) => {
+        this.onError(error);
+        finish();
+      };
+
+      this.player.once(AudioPlayerStatus.Playing, onPlaying);
+      this.player.once(AudioPlayerStatus.Idle, onIdle);
+      this.player.once("error", onError);
+      this.player.play(createAudioResource(Readable.from(buffer)));
+    });
+  }
 }
+
