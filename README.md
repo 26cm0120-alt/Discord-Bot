@@ -61,7 +61,7 @@ BotとVOICEVOX Engineを同じマシンで動かすと、インターネット�
 
 ## GitHub Actions とBotトークン
 
-Botトークンは `.env` にだけ設定し、`.env` はGitHubへ追加しません。GitHub ActionsへSecretとして登録する場合は、リポジトリの **Settings → Secrets and variables → Actions** で `DISCORD_TOKEN` を追加します。ワークフローから `${{ secrets.DISCORD_TOKEN }}` として参照できます。
+`.env.example` の `DISCORD_TOKEN=replace_me` は記入例なので公開して問題ありません。実際のトークンは書き込まず、Botを動かすPC/VPS上の `.env` か、GitHub ActionsのSecretに保管します。Actionsに登録する場合は、リポジトリの **Settings → Secrets and variables → Actions** で `DISCORD_TOKEN` を作成し、ワークフローから `${{ secrets.DISCORD_TOKEN }}` として参照します。漏えいしたトークンは再生成してから登録してください。
 
-Actions Secretはワークフロー実行時に使う保管場所です。GitHubホストRunner上でBotを常時運転するのは適しません。ホストRunnerの1ジョブは最大6時間で終了します。常時稼働させるにはPCやVPSでBotを実行し、ActionsはVPSへのデプロイに使う方法が向いています。公開リポジトリでは、フォークからのPull RequestにActions Secretは渡されません。
+Actions Secretは、ワークフローが実行中にだけ使える保管場所です。このリポジトリには、現時点でBotを起動・デプロイするActionsワークフローはありません。GitHubホストRunnerの1ジョブは最大6時間で終了するため、そこでBotを常時運転する使い方には向きません。常時稼働させるにはPCやVPSでBotを動かし、ActionsはVPSへのデプロイに使う構成が適しています。VPSへのデプロイワークフローは、接続先や起動方法が決まってから設定します。公開リポジトリでは、フォークからのPull RequestにActions Secretは渡されません。また、GitHubは公開リポジトリでのself-hosted runner利用に注意を促しています。
 
