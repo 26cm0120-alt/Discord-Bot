@@ -55,6 +55,22 @@ const commands = [
     .addStringOption((option) => option.setName("links").setDescription("URLの読み方")
       .addChoices({ name: "URLを省略", value: "omit" }, { name: "ドメインだけ読む", value: "domain" }, { name: "URL全体を読む", value: "keep" }))
     .setDefaultMemberPermissions(admin),
+  new SlashCommandBuilder()
+    .setName("birthday")
+    .setDescription("誕生日を登録して当日にお祝いを投稿します")
+    .addSubcommand((subcommand) => subcommand.setName("set").setDescription("自分の誕生日を登録・変更します")
+      .addIntegerOption((option) => option.setName("month").setDescription("誕生月（1〜12）").setRequired(true).setMinValue(1).setMaxValue(12))
+      .addIntegerOption((option) => option.setName("day").setDescription("誕生日の日（1〜31）").setRequired(true).setMinValue(1).setMaxValue(31))
+      .addChannelOption((option) => option.setName("channel").setDescription("お祝いを投稿するチャンネル（省略時はこのチャンネル）").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice)))
+    .addSubcommand((subcommand) => subcommand.setName("remove").setDescription("自分の誕生日登録を削除します"))
+    .addSubcommand((subcommand) => subcommand.setName("list").setDescription("登録済みの誕生日一覧を表示します")),
+  new SlashCommandBuilder()
+    .setName("season")
+    .setDescription("ゲームのステージローテーションを表示・更新します")
+    .addIntegerOption((option) => option.setName("year").setDescription("対象年（省略時は現在の年）").setMinValue(2020).setMaxValue(2100))
+    .addIntegerOption((option) => option.setName("month").setDescription("対象月（省略時は現在の月）").setMinValue(1).setMaxValue(12))
+    .addStringOption((option) => option.setName("schedule").setDescription("日付: ステージ1、ステージ2 の形式で1日ずつ入力すると月間予定を更新").setMaxLength(4000))
+    .addChannelOption((option) => option.setName("channel").setDescription("毎日の通知先（更新時、省略すると実行チャンネル）").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice)),
 ].map((command) => command.toJSON());
 
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
