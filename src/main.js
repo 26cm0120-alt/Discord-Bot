@@ -19,15 +19,15 @@ import { VoicevoxClient } from "./voicevox.js";
 const config = {
   token: process.env.DISCORD_TOKEN,
   guildId: process.env.GUILD_ID,
-  textChannelId: process.env.TEXT_CHANNEL_ID,
+  textChannelIds: new Set((process.env.TEXT_CHANNEL_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean)),
   voicevoxUrl: process.env.VOICEVOX_URL ?? "http://127.0.0.1:50021",
   defaultSpeakerId: Number(process.env.VOICEVOX_SPEAKER_ID ?? 1),
   maxMessageChars: Number(process.env.MAX_MESSAGE_CHARS ?? 240),
   maxQueueItems: Number(process.env.MAX_QUEUE_ITEMS ?? 30),
   voiceReadyTimeoutMs: Number(process.env.VOICE_READY_TIMEOUT_MS ?? 15000),
 };
-if (!config.token || !config.guildId || !config.textChannelId) {
-  throw new Error(".env の DISCORD_TOKEN, GUILD_ID, TEXT_CHANNEL_ID を設定してください。");
+if (!config.token || !config.guildId || config.textChannelIds.size === 0) {
+  throw new Error(".env の DISCORD_TOKEN, GUILD_ID, TEXT_CHANNEL_IDS を設定してください。");
 }
 
 const client = new Client({
@@ -111,11 +111,11 @@ function enqueueText({ text, authorId, receivedAt = Date.now() }) {
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot起動: ${readyClient.user.tag}; 対象サーバー=${config.guildId}`);
-  console.log(`TTS engine=${config.voicevoxUrl}; text channel=${config.textChannelId}`);
+  console.log(`TTS engine=${config.voicevoxUrl}; text channels=${[...config.textChannelIds].join(",")}`);
 });
 
 client.on(Events.MessageCreate, (message) => {
-  if (message.guildId !== config.guildId || message.channelId !== config.textChannelId) return;
+  if (message.guildId !== config.guildId || !config.textChannelIds.has(message.channelId)) return;
   if (message.author.bot || !connection || connection.state.status !== VoiceConnectionStatus.Ready) return;
 
   const text = message.cleanContent;
@@ -138,7 +138,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await connectTo(channel);
-      await interaction.editReply(`${channel.name} に接続しました。#${config.textChannelId === interaction.channelId ? interaction.channel.name : "対象チャンネル"} の投稿を読み上げます。`);
+      await interaction.editReply(`${channel.name} に接続しました。設定した読み上げ元チャンネルの投稿を読み上げます。`);
       return;
     }
 
@@ -193,3 +193,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
+
