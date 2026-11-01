@@ -19,6 +19,7 @@ import {
 } from "@discordjs/voice";
 import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
+import { GptSovitsClient } from "./gpt-sovits.js";
 
 const config = {
   token: process.env.DISCORD_TOKEN,
@@ -27,6 +28,11 @@ const config = {
   voicevoxUrl: process.env.VOICEVOX_URL ?? "http://127.0.0.1:50021",
   defaultSpeakerId: Number(process.env.VOICEVOX_SPEAKER_ID ?? 1),
   supikiSpeakerId: Number(process.env.SUPIKI_SPEAKER_ID ?? process.env.VOICEVOX_SPEAKER_ID ?? 1),
+  supikiTtsProvider: process.env.SUPIKI_TTS_PROVIDER ?? "voicevox",
+  gptSovitsUrl: process.env.GPT_SOVITS_URL ?? "http://127.0.0.1:9880",
+  gptSovitsReferenceAudioPath: process.env.GPT_SOVITS_REF_AUDIO_PATH ?? "",
+  gptSovitsReferenceText: process.env.GPT_SOVITS_REF_TEXT ?? "",
+  gptSovitsTimeoutMs: Number(process.env.GPT_SOVITS_TIMEOUT_MS ?? 60000),
   supikiVoiceSettings: {
     speedScale: Number(process.env.SUPIKI_SPEED_SCALE ?? 1.12),
     pitchScale: Number(process.env.SUPIKI_PITCH_SCALE ?? 0.08),
@@ -48,6 +54,10 @@ const defaultSettings = {
   announceVoiceEvents: config.announceVoiceEvents,
   linkSpeechMode: ["omit", "domain", "keep"].includes(config.linkSpeechMode) ? config.linkSpeechMode : "omit",
   dictionary: [],
+  birthdays: [],
+  seasonEntries: [],
+  seasonChannelId: null,
+  seasonLastAnnouncedDate: null,
 };
 let savedSettings = {};
 if (existsSync(settingsPath)) {
@@ -62,6 +72,8 @@ const guildSettings = {
   ...savedSettings,
   textChannelIds: Array.isArray(savedSettings.textChannelIds) ? savedSettings.textChannelIds : defaultSettings.textChannelIds,
   dictionary: Array.isArray(savedSettings.dictionary) ? savedSettings.dictionary : [],
+  birthdays: Array.isArray(savedSettings.birthdays) ? savedSettings.birthdays : [],
+  seasonEntries: Array.isArray(savedSettings.seasonEntries) ? savedSettings.seasonEntries : [],
 };
 if (!["omit", "domain", "keep"].includes(guildSettings.linkSpeechMode)) guildSettings.linkSpeechMode = "omit";
 const textChannelIds = new Set(guildSettings.textChannelIds);
@@ -79,6 +91,15 @@ const client = new Client({
   ],
 });
 const tts = new VoicevoxClient(config.voicevoxUrl, config.defaultSpeakerId);
+if (!["voicevox", "gpt-sovits"].includes(config.supikiTtsProvider)) {
+  throw new Error("SUPIKI_TTS_PROVIDER は voicevox または gpt-sovits を指定してください。");
+}
+const gptSovitsTts = new GptSovitsClient({
+  baseUrl: config.gptSovitsUrl,
+  referenceAudioPath: config.gptSovitsReferenceAudioPath,
+  referenceText: config.gptSovitsReferenceText,
+  timeoutMs: config.gptSovitsTimeoutMs,
+});
 const player = createAudioPlayer();
 const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
 let voiceClips = { join: null, leave: null, like: null, stop: null };
@@ -212,6 +233,7 @@ function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
   const voiceSettings = isSupiki
     ? config.supikiVoiceSettings
     : Object.fromEntries(["speedScale", "pitchScale", "intonationScale"].filter((key) => Number.isFinite(preference[key])).map((key) => [key, preference[key]]));
+  const synthesizer = isSupiki && config.supikiTtsProvider === "gpt-sovits" ? gptSovitsTts : tts;
   return queue.enqueue({
     text,
     segments: normalizedSegments,
@@ -219,6 +241,7 @@ function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
     receivedAt,
     speakerId: isSupiki ? config.supikiSpeakerId : (preference.speakerId ?? config.defaultSpeakerId),
     voiceSettings,
+    synthesizer,
   });
 }
 
@@ -278,8 +301,127 @@ async function connectTo(channel) {
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot起動: ${readyClient.user.tag}; 対象サーバー=${config.guildId}`);
   console.log(`TTS engine=${config.voicevoxUrl}; text channels=${[...textChannelIds].join(",")}`);
+  console.log(`Supiki TTS provider=${config.supikiTtsProvider}${config.supikiTtsProvider === "gpt-sovits" ? ` (${config.gptSovitsUrl})` : ""}`);
   console.log(`入退室通知=${guildSettings.announceVoiceEvents}; URL読み=${guildSettings.linkSpeechMode}`);
+  void announceBirthdaysForToday();
+  void announceTodaysSeason();
+  setInterval(() => void announceBirthdaysForToday(), 15_000);
+  scheduleNextSeasonMidnight();
 });
+
+const birthdayRetryAt = new Map();
+function getJstDateParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map(({ type, value }) => [type, Number(value)]));
+}
+
+async function announceBirthdaysForToday() {
+  const { year, month, day } = getJstDateParts();
+  for (const birthday of guildSettings.birthdays) {
+    if (birthday.month !== month || birthday.day !== day || birthday.lastAnnouncedYear === year) continue;
+    const previousAttempt = birthdayRetryAt.get(birthday.userId) ?? 0;
+    if (Date.now() - previousAttempt < 60_000) continue;
+    birthdayRetryAt.set(birthday.userId, Date.now());
+    try {
+      const channel = await client.channels.fetch(birthday.channelId);
+      if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
+        throw new Error(`誕生日の投稿先チャンネルが見つからないか、対象サーバー外です: ${birthday.channelId}`);
+      }
+      const guild = client.guilds.cache.get(config.guildId);
+      const member = await guild?.members.fetch(birthday.userId).catch(() => null);
+      const user = member?.displayName ?? (await client.users.fetch(birthday.userId).catch(() => null))?.username ?? "メンバー";
+      await channel.send({
+        content: `今日は${user}さんの誕生日です。おめでとうございます。`,
+        allowedMentions: { parse: [] },
+      });
+      birthday.lastAnnouncedYear = year;
+      saveGuildSettings();
+      console.log(`誕生日のお祝いを投稿しました: user=${birthday.userId}; channel=${birthday.channelId}; year=${year}`);
+    } catch (error) {
+      console.error(`誕生日のお祝いを投稿できませんでした（1分後に再試行）: user=${birthday.userId};`, error.message);
+    }
+  }
+}
+
+function parseSeasonSchedule(raw, year, month) {
+  const entries = new Map();
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) throw new Error("スケジュールが空です。");
+  for (const line of lines) {
+    const separator = line.search(/[:：]/);
+    if (separator < 0) throw new Error(`「${line}」に「:」がありません。例: 5: ステージA、ステージB`);
+    const dateLabel = line.slice(0, separator).trim();
+    const stageText = line.slice(separator + 1).trim();
+    const dateMatch = dateLabel.match(/^(?:(\d{1,2})\s*(?:\/|月)\s*)?(\d{1,2})\s*日?(?:\s*[（(][^）)]*[）)])?(?:\s*[※＊].*)?$/);
+    if (!dateMatch) throw new Error(`日付「${dateLabel}」を読めません。例: 5: ステージA、ステージB`);
+    if (dateMatch[1] && Number(dateMatch[1]) !== month) {
+      throw new Error(`「${dateLabel}」の月が指定月の${month}月と一致しません。`);
+    }
+    const day = Number(dateMatch[2]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      throw new Error(`日付「${dateLabel}」は${year}年${month}月に存在しません。`);
+    }
+    const stages = stageText.split(/[、,，|;；]+/).map((stage) => stage.trim()).filter(Boolean);
+    if (!stages.length) throw new Error(`「${dateLabel}」のステージが空です。`);
+    const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    if (entries.has(dateKey)) throw new Error(`${month}月${day}日の予定が重複しています。`);
+    entries.set(dateKey, { date: dateKey, stages });
+  }
+  return [...entries.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function formatSeasonEntry(entry) {
+  const [year, month, day] = entry.date.split("-").map(Number);
+  const weekday = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", weekday: "short" })
+    .format(new Date(Date.UTC(year, month - 1, day, 12)));
+  return `${month}/${day}（${weekday}）: ${entry.stages.join("、")}`;
+}
+
+const seasonRetryAt = { value: 0 };
+function scheduleNextSeasonMidnight() {
+  const { year, month, day } = getJstDateParts();
+  const nextJstMidnightUtc = Date.UTC(year, month - 1, day + 1) - 9 * 60 * 60 * 1000;
+  const timer = setTimeout(() => {
+    void announceTodaysSeason();
+    scheduleNextSeasonMidnight();
+  }, Math.max(0, nextJstMidnightUtc - Date.now()));
+  timer.unref?.();
+}
+
+async function announceTodaysSeason() {
+  const { year, month, day } = getJstDateParts();
+  const today = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  if (guildSettings.seasonLastAnnouncedDate === today || !guildSettings.seasonChannelId) return;
+  const entry = guildSettings.seasonEntries.find((item) => item.date === today);
+  if (!entry || Date.now() - seasonRetryAt.value < 60_000) return;
+  seasonRetryAt.value = Date.now();
+  try {
+    const channel = await client.channels.fetch(guildSettings.seasonChannelId);
+    if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
+      throw new Error(`通知先チャンネルが見つからないか、対象サーバー外です: ${guildSettings.seasonChannelId}`);
+    }
+    await channel.send({
+      content: `今日のステージローテーションは${entry.stages.join("、")}です。`,
+      allowedMentions: { parse: [] },
+    });
+    guildSettings.seasonLastAnnouncedDate = today;
+    saveGuildSettings();
+    console.log(`本日のステージローテーションを投稿しました: date=${today}; channel=${guildSettings.seasonChannelId}`);
+  } catch (error) {
+    console.error("ステージローテーションを投稿できませんでした（1分後に再試行）:", error.message);
+    const retryTimer = setTimeout(() => {
+      seasonRetryAt.value = 0;
+      void announceTodaysSeason();
+    }, 60_000);
+    retryTimer.unref?.();
+  }
+}
 
 client.on(Events.MessageCreate, (message) => {
   if (message.guildId !== config.guildId || !textChannelIds.has(message.channelId)) return;
@@ -359,6 +501,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           "`/setvoice speaker/speed/pitch` — 話者は名前から候補選択。`/speaker` — 話者変更。`/voice` — 自分の設定。`/voices page:<番号>` — 全話者一覧。",
           "`/supiki enabled:true/false` — 自分の投稿をスピキ風/通常に切替。",
           "`/dict add|remove|list` — 読み方辞書。`/readch add|remove|list` — 読み上げ対象チャンネル。",
+          "`/birthday set month day [channel]` — 誕生日とお祝い投稿先を登録。`/birthday list` — 一覧。`/birthday remove` — 自分の登録を削除。投稿は日本時間の日付が変わった後に行われます。",
+          "`/season` — 今月のローテーションを表示。`/season year month schedule` — 月間予定を登録（管理者）。登録時に通知先を選べます。",
           "`/setting` — 入退室通知とURL読み上げの設定（管理者）。",
         ].join("\n"),
       });
@@ -420,7 +564,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       else supikiUsers.delete(interaction.user.id);
       await interaction.reply({
         content: enabled
-          ? "あなたの投稿をスピキ風モードで読み上げます。通常に戻すには `/supiki enabled:false` を実行してください。"
+          ? "あなたの投稿をスピキモード（" + (config.supikiTtsProvider === "gpt-sovits" ? "GPT-SoVITS参照音声" : "VOICEVOX調整音声") + "）で読み上げます。通常に戻すには `/supiki enabled:false` を実行してください。"
           : "あなたの投稿を通常モードで読み上げます。",
         flags: MessageFlags.Ephemeral,
       });
@@ -557,6 +701,144 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (linkMode !== null) guildSettings.linkSpeechMode = linkMode;
       saveGuildSettings();
       await interaction.reply({ content: `設定を保存しました。入退室通知: ${guildSettings.announceVoiceEvents ? "ON" : "OFF"} / URL読み上げ: ${guildSettings.linkSpeechMode}`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.commandName === "season") {
+      const yearOption = interaction.options.getInteger("year");
+      const monthOption = interaction.options.getInteger("month");
+      const scheduleText = interaction.options.getString("schedule");
+      const channelOption = interaction.options.getChannel("channel");
+      const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
+
+      if (channelOption && !canManage) {
+        await interaction.reply({ content: "通知先を設定できるのはサーバー管理権限を持つメンバーです。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (channelOption && !channelOption.isTextBased()) {
+        await interaction.reply({ content: "通知先にはテキストチャンネルを指定してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (scheduleText !== null) {
+        if (!canManage) {
+          await interaction.reply({ content: "月間予定を更新できるのはサーバー管理権限を持つメンバーです。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        if (yearOption === null || monthOption === null) {
+          await interaction.reply({ content: "予定を登録するときは year と month を両方指定してください。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const channel = channelOption ?? interaction.channel;
+        if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
+          await interaction.reply({ content: "通知先にできるサーバー内のテキストチャンネルを選んでください。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        let importedEntries;
+        try {
+          importedEntries = parseSeasonSchedule(scheduleText, yearOption, monthOption);
+        } catch (error) {
+          await interaction.reply({ content: `予定を登録できませんでした: ${error.message}`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const monthPrefix = `${yearOption}-${String(monthOption).padStart(2, "0")}-`;
+        guildSettings.seasonEntries = [
+          ...guildSettings.seasonEntries.filter((entry) => !entry.date.startsWith(monthPrefix)),
+          ...importedEntries,
+        ].sort((a, b) => a.date.localeCompare(b.date));
+        guildSettings.seasonChannelId = channel.id;
+        saveGuildSettings();
+        await interaction.reply({
+          content: `${yearOption}年${monthOption}月の予定を${importedEntries.length}日分登録しました。毎日の通知先: <#${channel.id}>`,
+          flags: MessageFlags.Ephemeral,
+        });
+        void announceTodaysSeason();
+        return;
+      }
+
+      if (channelOption) {
+        guildSettings.seasonChannelId = channelOption.id;
+        saveGuildSettings();
+        await interaction.reply({ content: `毎日のステージ通知先を <#${channelOption.id}> に設定しました。`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if ((yearOption === null) !== (monthOption === null)) {
+        await interaction.reply({ content: "月間表示では year と month を両方指定するか、両方省略してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const currentDate = getJstDateParts();
+      const year = yearOption ?? currentDate.year;
+      const month = monthOption ?? currentDate.month;
+      const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
+      const entries = guildSettings.seasonEntries.filter((entry) => entry.date.startsWith(monthPrefix));
+      if (!entries.length) {
+        await interaction.reply({ content: `${year}年${month}月の予定はまだ登録されていません。`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const chunks = [];
+      let chunk = `**${year}年${month}月 ステージローテーション**`;
+      for (const entry of entries) {
+        const line = formatSeasonEntry(entry);
+        if (chunk.length + line.length + 1 > 1800) {
+          chunks.push(chunk);
+          chunk = "";
+        }
+        chunk += `${chunk ? "\n" : ""}${line}`;
+      }
+      if (chunk) chunks.push(chunk);
+      await interaction.reply({ content: chunks[0] });
+      for (const followup of chunks.slice(1)) await interaction.followUp({ content: followup });
+      return;
+    }
+
+    if (interaction.commandName === "birthday") {
+      const subcommand = interaction.options.getSubcommand();
+      const existingIndex = guildSettings.birthdays.findIndex((entry) => entry.userId === interaction.user.id);
+      if (subcommand === "set") {
+        const month = interaction.options.getInteger("month", true);
+        const day = interaction.options.getInteger("day", true);
+        const maxDay = new Date(Date.UTC(2024, month, 0)).getUTCDate();
+        if (day > maxDay) {
+          await interaction.reply({ content: `${month}月は${maxDay}日までです。`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const channel = interaction.options.getChannel("channel") ?? interaction.channel;
+        if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
+          await interaction.reply({ content: "投稿先にできるサーバー内のテキストチャンネルを選んでください。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const previous = existingIndex >= 0 ? guildSettings.birthdays[existingIndex] : null;
+        const birthday = {
+          userId: interaction.user.id,
+          month,
+          day,
+          channelId: channel.id,
+          lastAnnouncedYear: previous?.month === month && previous?.day === day ? previous.lastAnnouncedYear ?? null : null,
+        };
+        if (existingIndex >= 0) guildSettings.birthdays[existingIndex] = birthday;
+        else guildSettings.birthdays.push(birthday);
+        saveGuildSettings();
+        await interaction.reply({
+          content: `${month}月${day}日を誕生日として登録しました。お祝いは <#${channel.id}> に日本時間の日付が変わった後に投稿します。`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      if (subcommand === "remove") {
+        if (existingIndex < 0) {
+          await interaction.reply({ content: "誕生日は登録されていません。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        guildSettings.birthdays.splice(existingIndex, 1);
+        saveGuildSettings();
+        await interaction.reply({ content: "誕生日の登録を削除しました。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const entries = [...guildSettings.birthdays].sort((a, b) => a.month - b.month || a.day - b.day);
+      const lines = entries.map((entry) => `• ${entry.month}月${entry.day}日 — <@${entry.userId}>（<#${entry.channelId}>）`);
+      await interaction.reply({
+        content: lines.length ? `**登録済みの誕生日**\n${lines.join("\n")}`.slice(0, 1900) : "誕生日はまだ登録されていません。",
+        flags: MessageFlags.Ephemeral,
+      });
     }
   } catch (error) {
     console.error("コマンド処理エラー:", error);
