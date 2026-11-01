@@ -97,6 +97,7 @@ const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
 let connection = null;
 let lastMetric = null;
+const intentionalDisconnects = new WeakSet();
 const queue = new SpeechQueue({
   player,
   tts,
@@ -226,7 +227,10 @@ function enqueueText({ text, authorId, receivedAt = Date.now() }) {
 }
 
 async function connectTo(channel) {
-  if (connection) connection.destroy();
+  if (connection) {
+    intentionalDisconnects.add(connection);
+    connection.destroy();
+  }
   connection = joinVoiceChannel({
     channelId: channel.id,
     guildId: channel.guild.id,
@@ -238,12 +242,14 @@ async function connectTo(channel) {
   let reconnecting = false;
   connection.on(VoiceConnectionStatus.Disconnected, () => {
     console.warn("音声接続が切断されました。");
-    if (reconnecting) return;
+    if (reconnecting || intentionalDisconnects.has(activeConnection)) return;
     reconnecting = true;
     void (async () => {
       try {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        if (connection !== activeConnection || intentionalDisconnects.has(activeConnection)) return;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
-          if (connection !== activeConnection) return;
+          if (connection !== activeConnection || intentionalDisconnects.has(activeConnection)) return;
           activeConnection.rejoin();
           try {
             await entersState(activeConnection, VoiceConnectionStatus.Ready, 5000);
@@ -255,6 +261,7 @@ async function connectTo(channel) {
         }
         if (connection === activeConnection) {
           queue.clear();
+          intentionalDisconnects.add(activeConnection);
           activeConnection.destroy();
           connection = null;
           console.error("再接続できませんでした。/join で再接続してください。");
@@ -285,7 +292,22 @@ client.on(Events.MessageCreate, (message) => {
 });
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-  if (!guildSettings.announceVoiceEvents || oldState.guild.id !== config.guildId) return;
+  if (oldState.guild.id !== config.guildId) return;
+  const activeConnection = connection;
+  if (
+    activeConnection
+    && newState.id === client.user?.id
+    && oldState.channelId === activeConnection.joinConfig.channelId
+    && newState.channelId !== oldState.channelId
+  ) {
+    console.info("BotがDiscord上で切断または移動されたため、自動再接続を停止します。");
+    intentionalDisconnects.add(activeConnection);
+    connection = null;
+    queue.clear();
+    activeConnection.destroy();
+    return;
+  }
+  if (!guildSettings.announceVoiceEvents) return;
   const targetVoiceId = connection?.joinConfig?.channelId;
   if (!targetVoiceId || connection.state.status !== VoiceConnectionStatus.Ready) return;
   const wasInTarget = oldState.channelId === targetVoiceId;
@@ -358,7 +380,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "leave") {
       queue.clear();
-      connection?.destroy();
+      if (connection) {
+        intentionalDisconnects.add(connection);
+        connection.destroy();
+      }
       connection = null;
       await interaction.reply({ content: "読み上げを停止して切断しました。", flags: MessageFlags.Ephemeral });
       return;
