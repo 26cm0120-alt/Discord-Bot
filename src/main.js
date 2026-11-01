@@ -107,6 +107,28 @@ const queue = new SpeechQueue({
   },
   onError: (error) => console.error("読み上げエラー:", error.message),
 });
+let speakerStylesCache = [];
+let speakerStylesCacheAt = 0;
+
+async function getSpeakerStyles() {
+  if (Date.now() - speakerStylesCacheAt < 60_000 && speakerStylesCache.length) return speakerStylesCache;
+  const speakers = await tts.getSpeakers();
+  speakerStylesCache = speakers.flatMap((speaker) => speaker.styles.map((style) => ({
+    id: String(style.id),
+    label: `${speaker.name} — ${style.name}`.slice(0, 100),
+  })));
+  speakerStylesCacheAt = Date.now();
+  return speakerStylesCache;
+}
+
+async function getSpeakerLabel(speakerId) {
+  try {
+    const styles = await getSpeakerStyles();
+    return styles.find((style) => style.id === String(speakerId))?.label ?? "VOICEVOX既定話者";
+  } catch {
+    return "VOICEVOX Engine未接続";
+  }
+}
 
 const alphabetNames = {
   A: "エー", B: "ビー", C: "シー", D: "ディー", E: "イー", F: "エフ", G: "ジー",
@@ -152,9 +174,11 @@ function normalizeForSpeech(input) {
 }
 
 const soundCuePattern = /好き|(?<![A-Za-z])(?:like(?:s|d)?|liking)(?![A-Za-z])|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|(?<![A-Za-z])stop(?:s|ped|ping)?(?![A-Za-z])/giu;
+const standaloneSoundCuePattern = /^(?:好き|like(?:s|d)?|liking|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|stop(?:s|ped|ping)?)[\s。.!！?？、,]*$/iu;
 
 function buildSpeechSegments(input) {
   const text = replaceLinks(input.slice(0, config.maxMessageChars).replace(/\s+/g, " ")).trim();
+  if (standaloneSoundCuePattern.test(text)) return [{ type: "text", text }];
   const segments = [];
   let cursor = 0;
   for (const match of text.matchAll(soundCuePattern)) {
@@ -283,6 +307,24 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isAutocomplete()) {
+    if (interaction.guildId !== config.guildId) return;
+    const isSpeakerCommand = interaction.commandName === "speaker" || interaction.commandName === "setvoice";
+    if (!isSpeakerCommand || interaction.options.getFocused(true).name !== "speaker") return;
+    try {
+      const focused = String(interaction.options.getFocused()).toLocaleLowerCase();
+      const styles = await getSpeakerStyles();
+      const choices = styles
+        .filter((style) => style.label.toLocaleLowerCase().includes(focused))
+        .slice(0, 25)
+        .map((style) => ({ name: style.label, value: style.id }));
+      await interaction.respond(choices);
+    } catch (error) {
+      console.error("話者候補の取得エラー:", error.message);
+      await interaction.respond([]).catch(() => {});
+    }
+    return;
+  }
   if (!interaction.isChatInputCommand() || interaction.guildId !== config.guildId) return;
 
   try {
@@ -292,7 +334,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           "**読み上げBot コマンド一覧**",
           "`/join` — VCに接続して読み上げ開始。`/leave` — 切断。",
           "`/say text:<文章>` — 文章を直接読み上げ。`/skip` — 再生中をスキップ。`/queue` — 待ち状況。",
-          "`/setvoice speaker/speed/pitch` — 自分の声を調整。`/voice` — 自分の設定。`/voices` — 話者一覧。",
+          "`/setvoice speaker/speed/pitch` — 話者は名前から候補選択。`/speaker` — 話者変更。`/voice` — 自分の設定。`/voices page:<番号>` — 全話者一覧。",
           "`/supiki enabled:true/false` — 自分の投稿をスピキ風/通常に切替。",
           "`/dict add|remove|list` — 読み方辞書。`/readch add|remove|list` — 読み上げ対象チャンネル。",
           "`/setting` — 入退室通知とURL読み上げの設定（管理者）。",
@@ -362,17 +404,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "speaker" || interaction.commandName === "setvoice") {
       const preference = { ...(voicePreferencesByUser.get(interaction.user.id) ?? {}) };
+      const speakerValue = interaction.options.getString("speaker");
+      const selectedSpeakerId = speakerValue === null ? null : Number(speakerValue);
+      if (speakerValue !== null && (!Number.isInteger(selectedSpeakerId) || selectedSpeakerId < 0)) {
+        await interaction.reply({ content: "話者候補から名前を選んでください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
       if (interaction.commandName === "speaker") {
-        preference.speakerId = interaction.options.getInteger("id", true);
+        if (selectedSpeakerId === null) {
+          await interaction.reply({ content: "話者名を候補から選んでください。", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        preference.speakerId = selectedSpeakerId;
       } else {
-        const speakerId = interaction.options.getInteger("speaker");
         const speedScale = interaction.options.getNumber("speed");
         const pitchScale = interaction.options.getNumber("pitch");
-        if (speakerId === null && speedScale === null && pitchScale === null) {
+        if (selectedSpeakerId === null && speedScale === null && pitchScale === null) {
           await interaction.reply({ content: "speaker、speed、pitchのいずれかを指定してください。", flags: MessageFlags.Ephemeral });
           return;
         }
-        if (speakerId !== null) preference.speakerId = speakerId;
+        if (selectedSpeakerId !== null) preference.speakerId = selectedSpeakerId;
         if (speedScale !== null) preference.speedScale = speedScale;
         if (pitchScale !== null) preference.pitchScale = pitchScale;
       }
@@ -386,17 +437,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "voice") {
       const preference = voicePreferencesByUser.get(interaction.user.id) ?? {};
+      const speakerLabel = await getSpeakerLabel(preference.speakerId ?? config.defaultSpeakerId);
       await interaction.reply({
-        content: `話者ID: ${preference.speakerId ?? config.defaultSpeakerId}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}`,
+        content: `話者: ${speakerLabel}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}`,
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     if (interaction.commandName === "voices") {
-      const speakers = await tts.getSpeakers();
-      const lines = speakers.flatMap((speaker) => speaker.styles.map((style) => `${style.id}: ${speaker.name}（${style.name}）`)).slice(0, 35);
-      await interaction.reply({ content: `**VOICEVOX話者一覧（先頭35件）**\n${lines.join("\n")}`.slice(0, 1950), flags: MessageFlags.Ephemeral });
+      const styles = await getSpeakerStyles();
+      const pageSize = 15;
+      const pageCount = Math.max(1, Math.ceil(styles.length / pageSize));
+      const page = interaction.options.getInteger("page") ?? 1;
+      if (page > pageCount) {
+        await interaction.reply({ content: `ページは1〜${pageCount}で指定してください。`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const lines = styles.slice((page - 1) * pageSize, page * pageSize).map((style) => `• ${style.label}`);
+      await interaction.reply({
+        content: `**VOICEVOX話者一覧 ${page}/${pageCount}**\n${lines.join("\n")}\n\n変更するには /setvoice speaker で話者名を検索して選んでください。`,
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
