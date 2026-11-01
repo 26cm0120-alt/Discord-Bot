@@ -61,7 +61,9 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 このリポジトリは公開設定です。デプロイワークフローは `workflow_dispatch` のみで、Pull Requestでは実行しません。GitHub Actions Secretは実行時にワークフローが参照するための保管場所です。`.env.example`は必須ではありませんが、必要な設定項目を示す安全な雛形として残しています。実トークンは書き込まないでください。
 
 `/supiki enabled:true` で自分の投稿をスピキ風モードにし、`/supiki enabled:false` で通常モードへ戻せます。モード状態は利用者ごとに保持され、Bot再起動時に通常モードへ戻ります。音声サンプルから声を複製するのではなく、VOICEVOX話者と速度・高さ・抑揚を別設定にして近い雰囲気に調整します。`SUPIKI_SPEAKER_ID` と `SUPIKI_*_SCALE` は `.env` で調整できます。
-/setvoice speaker:<ID> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整し、/voice で確認できます。/voices はEngineが起動しているとき話者ID一覧を表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
+/setvoice speaker:<話者名> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整します。話者は入力候補から名前で選び、/speaker でも変更できます。/voices page:<番号> は話者名一覧を15種類ずつ表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
+
+対象語句を文中で置き換えます。対象語だけを単独で送った場合（例: `好き` や `stop`）は、効果音にせずVOICEVOXでその語を読みます。話者候補はVOICEVOX Engineの `/speakers` から取得するため、話者一覧を使う際はEngineを起動してください。
 
 `好き`、英単語の `like/likes/liked/liking` を含む箇所は `chuayo.mp3` に置換します。`やめて`、`やめてください`、`やめてくれ`、`やめなさい`、`やめてよ`、`やめろ`、英単語の `stop/stops/stopped/stopping` は `notviolence.mp3` に置換します。効果音の前後に残る文章はVOICEVOXで読み、同じ投稿内の順番を保ちます。
 
