@@ -11,7 +11,7 @@ Node.js の Bot と VOICEVOX Engine を同じ Linux VPS 上で動かす、小規
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
 - メッセージ本文を保存しない。ログにも本文を出さない
-- VC入退室時にVOICEVOX案内と効果音を連続再生（音声なしでも案内は継続。公開GitHub版には音声データを含めず、ローカル配布ZIPに同梱）
+- VC入退室時にVOICEVOX案内と専用効果音を順番に再生
 - URLを読み上げず「リンク省略」と案内する設定、ドメイン読み、英字略語の読み替え、管理者向け読み上げチャンネル管理
 - /dict の辞書登録で人名・固有名詞・英字などの読み方を修正
 - .bot-settings.json に読み上げチャンネル、入退室通知、URL設定、辞書を保存（.bot-settings.json はGit管理対象外）
@@ -62,7 +62,7 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 `/supiki enabled:true` で自分の投稿をスピキ風モードにし、`/supiki enabled:false` で通常モードへ戻せます。モード状態は利用者ごとに保持され、Bot再起動時に通常モードへ戻ります。音声サンプルから声を複製するのではなく、VOICEVOX話者と速度・高さ・抑揚を別設定にして近い雰囲気に調整します。`SUPIKI_SPEAKER_ID` と `SUPIKI_*_SCALE` は `.env` で調整できます。
 /setvoice speaker:<ID> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整し、/voice で確認できます。/voices はEngineが起動しているとき話者ID一覧を表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
 
-`links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが来ました。」の後に `speaki.mp3`、退出時は「○○さんが退出しました。」の後に `deruzibazeyoonly.mp3` を再生します。案内と効果音は一つの読み上げ列項目として順番に再生されます。公開GitHub版には利用者提供の音声データを含めていないため、GitHubから取得した場合は音声なしで案内のみ再生されます。
+`links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが」→ `speaki.mp3` →「しにきました。」、退出時は「○○さんが」→ `deruzibazeyoonly.mp3` →「しました。」の順に再生します。読み上げと効果音は一つの読み上げ列項目として扱い、途中に別の読み上げが割り込みません。
 
 ## 遅延の見方
 
@@ -94,6 +94,7 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 ## GitHub Actions とBotトークン
 
 `.env.example` の `DISCORD_TOKEN=replace_me` は記入例なので公開して問題ありません。実際のトークンは記入しないでください。VPSデプロイではGitHub Actions SecretからVPSへ渡し、VPS上の`.env`に保存します。Actions Secretはワークフロー実行中のみ利用可能で、公開リポジトリのフォークPull Requestには渡されません。
+
 
 
 
