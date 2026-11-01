@@ -47,3 +47,4 @@ export class VoicevoxClient {
     return Buffer.from(audio);
   }
 }
+
