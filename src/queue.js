@@ -13,9 +13,9 @@ export class SpeechQueue {
     this.busy = false;
   }
 
-  enqueue({ text, segments = [{ type: "text", text }], speakerId, voiceSettings = {}, authorId, receivedAt = Date.now() }) {
+  enqueue({ text, segments = [{ type: "text", text }], speakerId, voiceSettings = {}, synthesizer = this.tts, authorId, receivedAt = Date.now() }) {
     if (this.items.length >= this.maxItems) return { accepted: false, position: null };
-    this.items.push({ text, segments, speakerId, voiceSettings, authorId, receivedAt });
+    this.items.push({ text, segments, speakerId, voiceSettings, synthesizer, authorId, receivedAt });
     const position = this.items.length + (this.current ? 1 : 0);
     void this.pump();
     return { accepted: true, position };
@@ -55,7 +55,7 @@ export class SpeechQueue {
           if (segment.type === "text") {
             const synthesisStartedAt = Date.now();
             try {
-              buffer = await this.tts.synthesize(segment.text, item.speakerId, item.voiceSettings);
+              buffer = await item.synthesizer.synthesize(segment.text, item.speakerId, item.voiceSettings);
             } catch (error) {
               this.onError(error);
               break;
@@ -93,7 +93,10 @@ export class SpeechQueue {
         }
         started = true;
       };
-      const onIdle = () => finish();
+      const onIdle = () => {
+        if (!started) this.onError(new Error("音声プレイヤーが再生開始前に停止しました。"));
+        finish();
+      };
       const onError = (error) => {
         this.onError(error);
         finish();
@@ -102,7 +105,12 @@ export class SpeechQueue {
       this.player.once(AudioPlayerStatus.Playing, onPlaying);
       this.player.once(AudioPlayerStatus.Idle, onIdle);
       this.player.once("error", onError);
-      this.player.play(createAudioResource(Readable.from(buffer)));
+      try {
+        this.player.play(createAudioResource(Readable.from([buffer])));
+      } catch (error) {
+        this.onError(error);
+        finish();
+      }
     });
   }
 }
