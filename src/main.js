@@ -81,12 +81,14 @@ const client = new Client({
 const tts = new VoicevoxClient(config.voicevoxUrl, config.defaultSpeakerId);
 const player = createAudioPlayer();
 const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
-let voiceClips = { join: null, leave: null };
+let voiceClips = { join: null, leave: null, like: null, stop: null };
 try {
   const encodedClips = JSON.parse(readFileSync(voiceClipsPath, "utf8"));
   voiceClips = {
     join: Buffer.from(encodedClips.join ?? "", "base64"),
     leave: Buffer.from(encodedClips.leave ?? "", "base64"),
+    like: Buffer.from(encodedClips.like ?? "", "base64"),
+    stop: Buffer.from(encodedClips.stop ?? "", "base64"),
   };
 } catch (error) {
   console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
@@ -149,6 +151,26 @@ function normalizeForSpeech(input) {
   return text.trim().slice(0, config.maxMessageChars);
 }
 
+const soundCuePattern = /好き|(?<![A-Za-z])(?:like(?:s|d)?|liking)(?![A-Za-z])|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|(?<![A-Za-z])stop(?:s|ped|ping)?(?![A-Za-z])/giu;
+
+function buildSpeechSegments(input) {
+  const text = replaceLinks(input.slice(0, config.maxMessageChars).replace(/\s+/g, " ")).trim();
+  const segments = [];
+  let cursor = 0;
+  for (const match of text.matchAll(soundCuePattern)) {
+    const index = match.index ?? 0;
+    if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
+    const cue = match[0].toLowerCase();
+    const clip = cue === "好き" || ["like", "likes", "liked", "liking"].includes(cue)
+      ? voiceClips.like
+      : voiceClips.stop;
+    segments.push(clip?.length ? { type: "audio", buffer: clip } : { type: "text", text: match[0] });
+    cursor = index + match[0].length;
+  }
+  if (cursor < text.length) segments.push({ type: "text", text: text.slice(cursor) });
+  return segments.length ? segments : [{ type: "text", text }];
+}
+
 function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
   const normalizedSegments = segments.flatMap((segment) => {
     if (segment.type === "text") {
@@ -176,7 +198,7 @@ function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
 }
 
 function enqueueText({ text, authorId, receivedAt = Date.now() }) {
-  return enqueueSegments({ segments: [{ type: "text", text }], authorId, receivedAt });
+  return enqueueSegments({ segments: buildSpeechSegments(text), authorId, receivedAt });
 }
 
 async function connectTo(channel) {
