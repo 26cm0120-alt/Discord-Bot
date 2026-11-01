@@ -1,0 +1,17 @@
+services:
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    restart: unless-stopped
+    expose:
+      - "50021"
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      VOICEVOX_URL: http://voicevox:50021
+    depends_on:
+      - voicevox
+
