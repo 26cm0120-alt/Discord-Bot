@@ -6,7 +6,7 @@ Node.js の Bot と VOICEVOX Engine を同じマシンで動かす、小規模�
 
 ## 機能
 
-- 指定した1つのテキストチャンネルを読み上げる
+- `.env` で指定した複数のテキストチャンネルを読み上げる
 - `/join` `/leave` `/say` `/skip` `/queue` `/speaker` コマンド
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
@@ -25,7 +25,7 @@ VOICEVOX Engine は公式配布からインストールし、`http://127.0.0.1:5
 1. Discord Developer Portalでアプリを作り、Bot Tokenを発行します。
 2. Botの **Message Content Intent** を有効にします。自分の1サーバーだけで使う場合も、テキスト投稿本文を読む用途で必要です。
 3. Botを対象サーバーに招待し、対象テキストチャンネルの閲覧・メッセージ履歴閲覧と、ボイスチャンネルの接続・発言権限を付けます。
-4. `.env.example` を `.env` にコピーして、`DISCORD_TOKEN`、`CLIENT_ID`、`GUILD_ID`、`TEXT_CHANNEL_ID` を設定します。
+4. `.env.example` を `.env` にコピーして、`DISCORD_TOKEN`、`CLIENT_ID`、`GUILD_ID`、`TEXT_CHANNEL_IDS` を設定します。`TEXT_CHANNEL_IDS` はカンマ区切りで複数登録できます。例: `TEXT_CHANNEL_IDS=聞き専チャンネルID,別の聞き専チャンネルID,ボイスチャンネルID`
 5. `npm install` を実行します。
 6. `npm run deploy:commands` で対象サーバー限定コマンドを登録します。
 7. `npm start` を実行し、Discordで `/join` を使います。
@@ -56,4 +56,12 @@ BotとVOICEVOX Engineを同じマシンで動かすと、インターネット�
 - 待ち列もメモリ上です。停止・再起動で消えます。
 - VOICEVOX Engineが停止した場合は読み上げできません。
 - Botが参加した後、`.env` で指定したテキストチャンネルだけを読み上げます。
+- 読み上げ元が複数でも、音声の出力先は `/join` で接続したボイスチャンネル1つです。ボイスチャンネル内チャットも読み上げる場合、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。同チャット用に別のチャンネルIDを作る必要はありません。
 - より短い初動時間が必要なら、VOICEVOXの `/streaming_synthesis` とストリーム音声再生への変更を検討します。まずは現在の内訳を測り、合成待ちと接続待ちを分けてから最適化します。
+
+## GitHub Actions とBotトークン
+
+Botトークンは `.env` にだけ設定し、`.env` はGitHubへ追加しません。GitHub ActionsへSecretとして登録する場合は、リポジトリの **Settings → Secrets and variables → Actions** で `DISCORD_TOKEN` を追加します。ワークフローから `${{ secrets.DISCORD_TOKEN }}` として参照できます。
+
+Actions Secretはワークフロー実行時に使う保管場所です。GitHubホストRunner上でBotを常時運転するのは適しません。ホストRunnerの1ジョブは最大6時間で終了します。常時稼働させるにはPCやVPSでBotを実行し、ActionsはVPSへのデプロイに使う方法が向いています。公開リポジトリでは、フォークからのPull RequestにActions Secretは渡されません。
+
