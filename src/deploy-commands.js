@@ -15,15 +15,16 @@ const commands = [
   new SlashCommandBuilder()
     .setName("speaker")
     .setDescription("自分の読み上げ話者を変更します")
-    .addIntegerOption((option) => option.setName("id").setDescription("VOICEVOXのspeaker ID").setRequired(true).setMinValue(0)),
+    .addStringOption((option) => option.setName("speaker").setDescription("話者名・スタイル名で検索して選択").setRequired(true).setAutocomplete(true)),
   new SlashCommandBuilder()
     .setName("setvoice")
     .setDescription("自分の話者・速度・高さを調整します")
-    .addIntegerOption((option) => option.setName("speaker").setDescription("VOICEVOX speaker ID").setMinValue(0))
+    .addStringOption((option) => option.setName("speaker").setDescription("話者名・スタイル名で検索して選択").setAutocomplete(true))
     .addNumberOption((option) => option.setName("speed").setDescription("速度（0.5〜2.0、初期値1.0）").setMinValue(0.5).setMaxValue(2.0))
     .addNumberOption((option) => option.setName("pitch").setDescription("高さ（-0.15〜0.15、初期値0）").setMinValue(-0.15).setMaxValue(0.15)),
   new SlashCommandBuilder().setName("voice").setDescription("自分の現在の音声設定を表示します"),
-  new SlashCommandBuilder().setName("voices").setDescription("VOICEVOXの話者ID一覧を表示します"),
+  new SlashCommandBuilder().setName("voices").setDescription("VOICEVOXの話者名一覧をページ表示します")
+    .addIntegerOption((option) => option.setName("page").setDescription("表示するページ番号（1ページ15種類）").setMinValue(1)),
   new SlashCommandBuilder()
     .setName("supiki")
     .setDescription("自分の読み上げをスピキ風モードに切り替えます")
@@ -64,3 +65,4 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 console.log("サーバー専用スラッシュコマンドを登録しました。");
+
