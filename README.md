@@ -7,10 +7,13 @@ Node.js の Bot と VOICEVOX Engine を同じ Linux VPS 上で動かす、小規
 ## 機能
 
 - `.env` で指定した複数のテキストチャンネルを読み上げる
-- `/join` `/leave` `/say` `/skip` `/queue` `/speaker` コマンド
+- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` コマンド
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
 - メッセージ本文を保存しない。ログにも本文を出さない
+- VC入退室通知、URL省略/ドメイン読み、英字略語の読み替え、管理者向け読み上げチャンネル管理
+- /dict の辞書登録で人名・固有名詞・英字などの読み方を修正
+- .bot-settings.json に読み上げチャンネル、入退室通知、URL設定、辞書を保存（.bot-settings.json はGit管理対象外）
 
 ## 必要なもの
 
@@ -55,6 +58,9 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 
 このリポジトリは公開設定です。デプロイワークフローは `workflow_dispatch` のみで、Pull Requestでは実行しません。GitHub Actions Secretは実行時にワークフローが参照するための保管場所です。`.env.example`は必須ではありませんが、必要な設定項目を示す安全な雛形として残しています。実トークンは書き込まないでください。
 
+`/supiki enabled:true` で自分の投稿をスピキ風モードにし、`/supiki enabled:false` で通常モードへ戻せます。モード状態は利用者ごとに保持され、Bot再起動時に通常モードへ戻ります。音声サンプルから声を複製するのではなく、VOICEVOX話者と速度・高さ・抑揚を別設定にして近い雰囲気に調整します。`SUPIKI_SPEAKER_ID` と `SUPIKI_*_SCALE` は `.env` で調整できます。
+/setvoice speaker:<ID> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整し、/voice で確認できます。/voices はEngineが起動しているとき話者ID一覧を表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
+
 ## 遅延の見方
 
 `/queue` とBotのログに次の内訳が出ます。
@@ -85,4 +91,6 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 ## GitHub Actions とBotトークン
 
 `.env.example` の `DISCORD_TOKEN=replace_me` は記入例なので公開して問題ありません。実際のトークンは記入しないでください。VPSデプロイではGitHub Actions SecretからVPSへ渡し、VPS上の`.env`に保存します。Actions Secretはワークフロー実行中のみ利用可能で、公開リポジトリのフォークPull Requestには渡されません。
+
+
 
