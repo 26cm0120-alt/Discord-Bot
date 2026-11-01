@@ -12,6 +12,7 @@ Node.js の Bot と VOICEVOX Engine を同じ Linux VPS 上で動かす、小規
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
 - メッセージ本文を保存しない。ログにも本文を出さない
 - VC入退室時にVOICEVOX案内と専用効果音を順番に再生
+- 「好き/like」を `chuayo.mp3`、「やめて/やめろ/stop」を `notviolence.mp3` に置換し、文の前後をVOICEVOXで読み上げ
 - URLを読み上げず「リンク省略」と案内する設定、ドメイン読み、英字略語の読み替え、管理者向け読み上げチャンネル管理
 - /dict の辞書登録で人名・固有名詞・英字などの読み方を修正
 - .bot-settings.json に読み上げチャンネル、入退室通知、URL設定、辞書を保存（.bot-settings.json はGit管理対象外）
@@ -61,6 +62,8 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 
 `/supiki enabled:true` で自分の投稿をスピキ風モードにし、`/supiki enabled:false` で通常モードへ戻せます。モード状態は利用者ごとに保持され、Bot再起動時に通常モードへ戻ります。音声サンプルから声を複製するのではなく、VOICEVOX話者と速度・高さ・抑揚を別設定にして近い雰囲気に調整します。`SUPIKI_SPEAKER_ID` と `SUPIKI_*_SCALE` は `.env` で調整できます。
 /setvoice speaker:<ID> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整し、/voice で確認できます。/voices はEngineが起動しているとき話者ID一覧を表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
+
+`好き`、英単語の `like/likes/liked/liking` を含む箇所は `chuayo.mp3` に置換します。`やめて`、`やめてください`、`やめてくれ`、`やめなさい`、`やめてよ`、`やめろ`、英単語の `stop/stops/stopped/stopping` は `notviolence.mp3` に置換します。効果音の前後に残る文章はVOICEVOXで読み、同じ投稿内の順番を保ちます。
 
 `links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが」→ `speaki.mp3` →「しにきました。」、退出時は「○○さんが」→ `deruzibazeyoonly.mp3` →「しました。」の順に再生します。読み上げと効果音は一つの読み上げ列項目として扱い、途中に別の読み上げが割り込みません。
 
