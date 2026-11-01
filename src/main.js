@@ -95,6 +95,16 @@ const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
 let connection = null;
 let lastMetric = null;
+const queue = new SpeechQueue({
+  player,
+  tts,
+  maxItems: config.maxQueueItems,
+  onMetric: (metric) => {
+    lastMetric = metric;
+    console.log(JSON.stringify({ event: "speech_started", ...metric }));
+  },
+  onError: (error) => console.error("読み上げエラー:", error.message),
+});
 
 const alphabetNames = {
   A: "エー", B: "ビー", C: "シー", D: "ディー", E: "イー", F: "エフ", G: "ジー",
@@ -432,4 +442,5 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
+
 
