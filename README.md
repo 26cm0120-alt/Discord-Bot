@@ -32,6 +32,20 @@ VOICEVOX Engine は公式 CPU コンテナを使用します。VPSのCPU性能�
 
 ローカル起動ではVOICEVOX Engineを同じマシンで動かし、EngineをLANや外部に公開しないでください。
 
+## Windows PCで試す（VPS・Dockerなし）
+
+この方法なら、VOICEVOXのWindows版とNode.jsを直接起動できます。
+
+1. Node.js 24.17以上とVOICEVOX Windows版をインストールします。VOICEVOXはCPU版から始めます。
+2. VOICEVOXを起動し、EngineのAPIドキュメント `http://127.0.0.1:50021/docs` が開くことを確認します。
+3. このリポジトリをPCへダウンロードまたはcloneし、PowerShellでリポジトリのフォルダーを開きます。
+4. `Copy-Item .env.example .env` を実行し、`.env`を編集します。再生成した `DISCORD_TOKEN`、Developer Portalの `CLIENT_ID`、Discordの `GUILD_ID`、読み上げ元の `TEXT_CHANNEL_IDS` を設定します。IDはカンマ区切りで複数指定できます。
+5. `npm install` を実行します。
+6. `npm run deploy:commands` を実行し、その後 `npm start` でBotを起動します。
+7. DiscordでBotが対象サーバーに参加していることを確認し、読み上げたいボイスチャンネルに入って `/join` を実行します。
+
+Developer PortalでMessage Content Intentを有効にしてください。Botが読むのは `.env` に登録したチャンネルIDだけです。ボイスチャンネル内チャットも対象にする場合は、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。PCがスリープまたは電源オフになるとBotも停止します。
+
 ## VPSへのデプロイ
 
 1. Linux VPSにDocker EngineとDocker Composeを用意し、SSH接続用ユーザーが `/opt/discord-tts-bot` を書き込めるようにします。
