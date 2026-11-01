@@ -1,0 +1,76 @@
+name: Deploy Discord TTS bot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-tts-production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      GUILD_ID: ${{ vars.GUILD_ID }}
+      TEXT_CHANNEL_IDS: ${{ vars.TEXT_CHANNEL_IDS }}
+      VOICEVOX_SPEAKER_ID: ${{ vars.VOICEVOX_SPEAKER_ID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_TOKEN"
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          test -n "$VPS_KNOWN_HOSTS"
+          test -n "$CLIENT_ID"
+          test -n "$GUILD_ID"
+          test -n "$TEXT_CHANNEL_IDS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/known_hosts" "$HOME/.ssh/id_ed25519"
+
+      - name: Prepare deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          printf 'DISCORD_TOKEN=%s\nCLIENT_ID=%s\nGUILD_ID=%s\nTEXT_CHANNEL_IDS=%s\nVOICEVOX_SPEAKER_ID=%s\n' \
+            "$DISCORD_TOKEN" "$CLIENT_ID" "$GUILD_ID" "$TEXT_CHANNEL_IDS" "${VOICEVOX_SPEAKER_ID:-1}" \
+            > "$RUNNER_TEMP/discord-tts.env"
+
+      - name: Copy files and restart services
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="$VPS_USER@$VPS_HOST"
+          ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" 'mkdir -p /opt/discord-tts-bot'
+          rsync -az --delete \
+            --exclude='.git' --exclude='.env' --exclude='node_modules' \
+            -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+            ./ "$remote:/opt/discord-tts-bot/"
+          scp -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes \
+            "$RUNNER_TEMP/discord-tts.env" "$remote:/opt/discord-tts-bot/.env"
+          ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" \
+            'chmod 600 /opt/discord-tts-bot/.env && cd /opt/discord-tts-bot && docker compose up -d --build'
+
+      - name: Remove temporary credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/discord-tts.env" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
