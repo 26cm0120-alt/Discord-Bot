@@ -2,6 +2,9 @@ node_modules/
 .env
 logs/
 *.wav
+/assets/gpt-sovits/raw/
+/assets/gpt-sovits/reference/
 
 .bot-settings.json
+
 
