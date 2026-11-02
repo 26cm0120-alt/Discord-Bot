@@ -1,6 +1,10 @@
-# 1サーバー専用 Discord 読み上げBot
+# Discord読み上げBot（Windows PCローカル運用）
 
-Node.js の Bot と VOICEVOX Engine を同じ Linux VPS 上で動かす、小規模サーバー向けの初期版です。Docker Compose の内部ネットワークで接続し、VOICEVOX API のポートはインターネットへ公開しません。メッセージ本文をログやDBに保存せず、受信から合成・再生開始までの時間だけを記録します。
+この構成では、Discord BotとVOICEVOX Engineを同じWindows PCで動かします。GPT-SoVITSを使う場合も同じPCで必要なときだけ起動し、音声処理をこのPCにまとめます。OCI VPSやDockerは現在の運用には使いません。
+
+GitHubはソースコードの保管・更新に使います。実行中のBotがGitHub ActionsやVPSに依存する構成ではありません。Discordトークンなどの秘密情報はPC内の `.env` にだけ保存し、GitHubへ登録・コミットしないでください。`.bot-settings.json` もPC内に保存され、Git管理対象外です。
+
+VOICEVOXはWindows版を起動し、Botから `http://127.0.0.1:50021` で接続します。GPT-SoVITSは使用時だけローカルAPIを起動します。PCがスリープまたは電源オフになるとBotも停止します。
 
 「遅延ゼロ」は保証できません。Discordの音声経路、回線、マシン負荷、VOICEVOXの合成時間に左右されるためです。この実装では `/queue` と標準出力の計測値で、待ち時間を分解して確認します。
 
@@ -21,11 +25,14 @@ Node.js の Bot と VOICEVOX Engine を同じ Linux VPS 上で動かす、小規
 
 ## 必要なもの
 
+- Windows 10/11 PC
 - Node.js 24.17 以上
+- Windows版 VOICEVOX（まずはCPU版で動作確認）
 - Discord Developer Portal のアプリ/Bot
-- Docker Engine と Docker Compose が使える Linux VPS
+- Git（cloneで取得する場合。ZIPでの取得も可能）
+- GPT-SoVITS（スピキモードで使う場合のみ）
 
-VOICEVOX Engine は公式 CPU コンテナを使用します。VPSのCPU性能によって合成速度が変わるため、まずは小さな文章で計測し、遅延が大きい場合はVPSのCPU/RAMを増やしてください。使用する話者の利用規約とクレジット表記も確認してください。
+VOICEVOX EngineとBotは同じPC上で動かします。VOICEVOXのAPIをLANやインターネットへ公開しないでください。GPT-SoVITSは必要なときだけ起動し、Botと同時に重い音声処理を重ねない運用を基本にします。話者の利用規約とクレジット表記も確認してください。
 
 ## セットアップ
 
@@ -39,21 +46,40 @@ VOICEVOX Engine は公式 CPU コンテナを使用します。VPSのCPU性能�
 
 ローカル起動ではVOICEVOX Engineを同じマシンで動かし、EngineをLANや外部に公開しないでください。
 
-## Windows PCで試す（VPS・Dockerなし）
+## Windows PCでまとめて運用する
 
-この方法なら、VOICEVOXのWindows版とNode.jsを直接起動できます。
+### 初回セットアップ
 
-1. Node.js 24.17以上とVOICEVOX Windows版をインストールします。VOICEVOXはCPU版から始めます。
-2. VOICEVOXを起動し、EngineのAPIドキュメント `http://127.0.0.1:50021/docs` が開くことを確認します。
-3. このリポジトリをPCへダウンロードまたはcloneし、PowerShellでリポジトリのフォルダーを開きます。
-4. `Copy-Item .env.example .env` を実行し、`.env`を編集します。再生成した `DISCORD_TOKEN`、Developer Portalの `CLIENT_ID`、Discordの `GUILD_ID`、読み上げ元の `TEXT_CHANNEL_IDS` を設定します。IDはカンマ区切りで複数指定できます。
-5. `npm install` を実行します。
-6. `npm run deploy:commands` を実行し、その後 `npm start` でBotを起動します。
-7. DiscordでBotが対象サーバーに参加していることを確認し、読み上げたいボイスチャンネルに入って `/join` を実行します。
+1. Node.js 24.17以上とVOICEVOX Windows版をインストールします。VOICEVOXはCPU版から起動し、EngineのAPIドキュメント `http://127.0.0.1:50021/docs` が開くことを確認します。
+2. PowerShellで次を実行して、GitHubからコードを取得し依存関係を入れます。
 
-Developer PortalでMessage Content Intentを有効にしてください。Botが読むのは `.env` に登録したチャンネルIDだけです。ボイスチャンネル内チャットも対象にする場合は、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。PCがスリープまたは電源オフになるとBotも停止します。
+```powershell
+git clone https://github.com/26cm0120-alt/Discord-Bot.git
+Set-Location .\Discord-Bot
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+npm ci
+```
 
-## VPSへのデプロイ
+3. `.env`をメモ帳などで編集し、Discord Developer Portalで発行した `DISCORD_TOKEN`、`CLIENT_ID`、対象サーバーの `GUILD_ID`、読み上げ元の `TEXT_CHANNEL_IDS` を設定します。チャンネルIDはカンマ区切りで複数指定できます。実トークンをGitHubへ貼り付けたり、コミットしたりしないでください。
+4. Developer Portalで **Message Content Intent** を有効にし、Botを対象サーバーへ招待します。テキストチャンネルの閲覧・メッセージ履歴閲覧と、ボイスチャンネルの接続・発言権限を付けます。
+5. PowerShellで以下を実行し、Discordコマンドを登録してBotを起動します。
+
+```powershell
+npm run deploy:commands
+npm start
+```
+
+6. Discordで読み上げたいボイスチャンネルに入って `/join` を実行します。
+
+### 日常の起動とGitHubからの更新
+
+VOICEVOX Windows版を先に起動してから、PowerShellでBotのフォルダーに移動して `npm start` を実行します。コード更新時はBotを止め、フォルダー内で `git pull` を実行します。依存関係が変わった更新では `npm ci` も実行してからBotを再起動します。GitHub ActionsのVPSデプロイは実行しません。
+
+GPT-SoVITSを使う場合は、必要なときだけローカルAPIを起動し、`.env`の `SUPIKI_TTS_PROVIDER=gpt-sovits` と参照音声の設定を使います。VOICEVOXとGPT-SoVITSの合成を同時に多重実行しないようにしてください。Botが読むのは `.env` に登録したチャンネルIDだけです。ボイスチャンネル内チャットも対象にする場合は、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。PCがスリープまたは電源オフになるとBotも停止します。
+
+## VPSへのデプロイ（現在は保留）
+
+ローカルPCでまとめて運用する間、この手順とGitHub ActionsのVPSデプロイは実行しません。A1 FlexなどのVPSを再開するときに使う参考手順です。
 
 1. Linux VPSにDocker EngineとDocker Composeを用意し、SSH接続用ユーザーが `/opt/discord-tts-bot` を書き込めるようにします。
 2. GitHubの **Settings → Secrets and variables → Actions** で次のRepository secretsを登録します: `DISCORD_TOKEN`（必ず再生成した新しいBotトークン）、`VPS_HOST`、`VPS_USER`、`VPS_SSH_KEY`、`VPS_KNOWN_HOSTS`。
