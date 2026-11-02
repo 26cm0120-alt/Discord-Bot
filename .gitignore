@@ -8,3 +8,4 @@ logs/
 .bot-settings.json
 
 
+/assets/gpt-sovits/transcriptions.csv
