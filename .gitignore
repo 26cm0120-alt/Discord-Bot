@@ -6,5 +6,4 @@ logs/
 /assets/gpt-sovits/reference/
 
 .bot-settings.json
-
-
+/assets/gpt-sovits/transcriptions.csv
