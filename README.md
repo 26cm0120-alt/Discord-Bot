@@ -7,10 +7,12 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 ## 機能
 
 - `.env` で指定した複数のテキストチャンネルを読み上げる
-- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` コマンド
+- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/status` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` コマンド
 - `/birthday set` で誕生日を登録し、日本時間の日付が変わると指定チャンネルへお祝いを投稿
 - `/season` で月間ステージローテーションを表示し、管理者が更新した予定を日本時間0時に指定チャンネルへ通知
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
+- `/status` で音声接続、読み上げモード、待ち列、VOICEVOX/GPT-SoVITS APIの応答と一時キャッシュ量を確認
+- GPT-SoVITSの合成音声を最大32件・64 MiBまでメモリ内に一時キャッシュ（Bot停止時に消去）
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
 - `/supiki-language` でGPT-SoVITSの言語を日本語・韓国語・自動から選択
 - 日本語・韓国語それぞれの参照音声を設定し、複数ペアを順番に利用

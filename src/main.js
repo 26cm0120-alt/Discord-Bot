@@ -21,6 +21,7 @@ import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
 import { GptSovitsClient } from "./gpt-sovits.js";
 import { splitTextByLanguage } from "./language-segments.js";
+import { formatEndpointStatus, probeEndpoint } from "./engine-health.js";
 
 const config = {
   token: process.env.DISCORD_TOKEN,
@@ -581,6 +582,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           "**読み上げBot コマンド一覧**",
           "`/join` — VCに接続して読み上げ開始。`/leave` — 切断。",
           "`/say text:<文章>` — 文章を直接読み上げ。`/skip` — 再生中をスキップ。`/queue` — 待ち状況。",
+          "`/status` — 音声接続、Engine/APIの応答、読み上げ設定、一時キャッシュを確認。",
           "`/setvoice speaker/speed/pitch` — 話者は名前から候補選択。`/speaker` — 話者変更。`/voice` — 自分の設定。`/voices page:<番号>` — 全話者一覧。",
           "`/supiki enabled:true/false` — 自分の投稿をスピキ風/通常に切替。",
           "`/supiki-language language:auto|ja|ko` — GPT-SoVITSの読み上げ言語を自分用に設定。",
@@ -622,6 +624,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ? `\n直近: 待ち ${lastMetric.queueWaitMs} ms / 合成 ${lastMetric.synthesisMs} ms / 受信から再生開始 ${lastMetric.playbackStartMs ?? "計測中"} ms`
         : "\nまだ再生計測はありません。";
       await interaction.reply({ content: `待ち件数: ${queue.size}${metricText}`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.commandName === "status") {
+      const [voicevoxStatus, gptSovitsStatus] = await Promise.all([
+        probeEndpoint(config.voicevoxUrl, { path: "/version" }),
+        probeEndpoint(config.gptSovitsUrl, { path: "/docs" }),
+      ]);
+      const channelId = connection?.joinConfig?.channelId;
+      const channel = channelId ? client.channels.cache.get(channelId) : null;
+      const connectionLabel = connection?.state.status === VoiceConnectionStatus.Ready
+        ? `接続中${channel ? `（${channel.name}）` : ""}`
+        : connection ? `接続状態: ${connection.state.status}` : "未接続";
+      const language = gptSovitsLanguageByUser.get(interaction.user.id) ?? config.gptSovitsTextLanguage;
+      const mode = supikiUsers.has(interaction.user.id)
+        ? config.supikiTtsProvider === "gpt-sovits"
+          ? `GPT-SoVITS（${language}）`
+          : `VOICEVOXスピキ調整（話者 ${config.supikiSpeakerId}）`
+        : `VOICEVOX話者 ${voicePreferencesByUser.get(interaction.user.id)?.speakerId ?? config.defaultSpeakerId}`;
+      const cache = gptSovitsTts.audioCache.stats;
+      const cacheMiB = (cache.bytes / (1024 * 1024)).toFixed(1);
+      const content = [
+        `音声接続: ${connectionLabel}`,
+        `あなたの読み上げ: ${mode}`,
+        `待ち列: ${queue.size}件`,
+        formatEndpointStatus("VOICEVOX Engine", voicevoxStatus),
+        formatEndpointStatus("GPT-SoVITS API", gptSovitsStatus),
+        `GPT-SoVITS一時キャッシュ: ${cache.entries}/${cache.maxEntries}件、${cacheMiB}/${(cache.maxBytes / (1024 * 1024)).toFixed(0)} MiB（メモリ内）`,
+      ].join("\n");
+      await interaction.reply({ content, flags: MessageFlags.Ephemeral });
       return;
     }
 

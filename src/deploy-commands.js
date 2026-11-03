@@ -7,6 +7,7 @@ const commands = [
   new SlashCommandBuilder().setName("help").setDescription("読み上げBotのコマンド一覧を表示します"),
   new SlashCommandBuilder().setName("leave").setDescription("読み上げを停止して切断します"),
   new SlashCommandBuilder().setName("queue").setDescription("読み上げ待ち件数と直近の遅延を表示します"),
+  new SlashCommandBuilder().setName("status").setDescription("Bot、音声接続、音声エンジンの状態を確認します"),
   new SlashCommandBuilder().setName("skip").setDescription("再生中の文章をスキップします"),
   new SlashCommandBuilder()
     .setName("say")
