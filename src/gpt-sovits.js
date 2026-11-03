@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { AudioCache } from "./audio-cache.js";
+
 export function normalizePcm16Wav(input) {
   const audio = Buffer.from(input);
   if (audio.length < 44 || audio.toString("ascii", 0, 4) !== "RIFF" || audio.toString("ascii", 8, 12) !== "WAVE") {
@@ -70,6 +73,7 @@ export class GptSovitsClient {
     textLanguage = "auto",
     timeoutMs = 60000,
     promptFree = false,
+    audioCache = new AudioCache(),
   }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     // The GPT-SoVITS process, not this bot process, opens this file. Preserve
@@ -101,12 +105,29 @@ export class GptSovitsClient {
     this.textLanguage = textLanguage.trim() || "auto";
     this.timeoutMs = timeoutMs;
     this.promptFree = promptFree;
+    this.audioCache = audioCache;
   }
 
   async synthesize(text, textLanguage = this.textLanguage) {
     const language = textLanguage.trim().toLowerCase();
     const referenceLanguage = inferReferenceLanguage(text, language, this.promptLanguage);
     const pool = referenceLanguage ? this.references[referenceLanguage] : null;
+    const referencePool = pool?.length ? pool : [{
+      audioPath: this.referenceAudioPath,
+      text: this.referenceText,
+      promptLanguage: this.promptLanguage,
+    }];
+    const normalizedText = text.normalize("NFKC");
+    const cacheKey = createHash("sha256").update(JSON.stringify({
+      text: normalizedText,
+      language,
+      referenceLanguage,
+      references: referencePool,
+      promptFree: this.promptFree,
+    })).digest("hex");
+    const cachedAudio = this.audioCache.get(cacheKey);
+    if (cachedAudio) return cachedAudio;
+
     let reference;
     if (pool?.length) {
       const index = this.referenceIndexes[referenceLanguage] ?? 0;
@@ -132,7 +153,7 @@ export class GptSovitsClient {
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(this.timeoutMs),
       body: JSON.stringify({
-        text: text.normalize("NFKC"),
+        text: normalizedText,
         text_lang: language,
         ref_audio_path: reference.audioPath,
         prompt_text: this.promptFree ? "" : reference.text,
@@ -148,6 +169,8 @@ export class GptSovitsClient {
       const detail = (await response.text()).slice(0, 300);
       throw new Error(`GPT-SoVITS /tts returned HTTP ${response.status}: ${detail}`);
     }
-    return normalizePcm16Wav(Buffer.from(await response.arrayBuffer()));
+    const audio = normalizePcm16Wav(Buffer.from(await response.arrayBuffer()));
+    this.audioCache.set(cacheKey, audio);
+    return audio;
   }
 }
