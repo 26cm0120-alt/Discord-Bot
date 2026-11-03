@@ -30,6 +30,15 @@ const commands = [
     .setDescription("自分の読み上げをスピキ風モードに切り替えます")
     .addBooleanOption((option) => option.setName("enabled").setDescription("trueで有効、falseで通常モードに戻します").setRequired(true)),
   new SlashCommandBuilder()
+    .setName("supiki-language")
+    .setDescription("自分のGPT-SoVITS読み上げ言語を変更します")
+    .addStringOption((option) => option.setName("language").setDescription("読み上げ言語")
+      .addChoices(
+        { name: "自動判定", value: "auto" },
+        { name: "日本語", value: "ja" },
+        { name: "韓国語", value: "ko" },
+      ).setRequired(true)),
+  new SlashCommandBuilder()
     .setName("dict")
     .setDescription("読み上げ辞書を管理します（管理者）")
     .addSubcommand((subcommand) => subcommand.setName("add").setDescription("単語の読み方を登録します")
@@ -81,4 +90,3 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 console.log("サーバー専用スラッシュコマンドを登録しました。");
-

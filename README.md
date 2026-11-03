@@ -1,200 +1,111 @@
-# Discord読み上げBot
+# 1サーバー専用 Discord 読み上げBot
 
-Windows PC上でDiscord BotとVOICEVOXを動かす、1サーバー向けの読み上げBotです。GPT-SoVITSを使う場合も同じPCで起動できます。現在の標準構成では、OCI VPSやDockerは使いません。
+Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC 上で動かす構成です。各APIは localhost にバインドし、外部へ公開しません。メッセージ本文はログやDBに保存せず、受信から合成・再生開始までの時間だけを記録します。
 
-GitHubはコードの保管と更新に使います。Botの実行にGitHub Actionsは必要ありません。Discordトークンなどの秘密情報はPC内の `.env` にだけ保存してください。`.env`、`.bot-settings.json`、GPT-SoVITSの参照音声はGit管理対象外です。
+「遅延ゼロ」は保証できません。Discordの音声経路、回線、マシン負荷、VOICEVOXの合成時間に左右されるためです。この実装では `/queue` と標準出力の計測値で、待ち時間を分解して確認します。
 
-## 目次
+## 機能
 
-- [運用構成](#運用構成)
-- [初回セットアップ](#初回セットアップ)
-- [起動と更新](#起動と更新)
-- [機能とコマンド](#機能とコマンド)
-- [GPT-SoVITSを使う（任意）](#gpt-sovitsを使う任意)
-- [遅延の確認と制限](#遅延の確認と制限)
-- [VPS運用を再開するとき（現在保留）](#vps運用を再開するとき現在保留)
+- `.env` で指定した複数のテキストチャンネルを読み上げる
+- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` コマンド
+- `/birthday set` で誕生日を登録し、日本時間の日付が変わると指定チャンネルへお祝いを投稿
+- `/season` で月間ステージローテーションを表示し、管理者が更新した予定を日本時間0時に指定チャンネルへ通知
+- 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
+- 受信から再生開始までの待ち、合成時間、合計時間の計測
+- `/supiki-language` でGPT-SoVITSの言語を日本語・韓国語・自動から選択
+- 日本語・韓国語それぞれの参照音声を設定し、複数ペアを順番に利用
+- 参照テキストの末尾が生成音声に混ざる場合は `GPT_SOVITS_PROMPT_FREE=true` で参照テキストをAPIへ送らない
+- `TTS_PLAYBACK_VOLUME` でVOICEVOX/GPT-SoVITSの読み上げ音量を調整
+- メッセージ本文を保存しない。ログにも本文を出さない
+- VC入退室時にVOICEVOX案内と専用効果音を順番に再生
+- 「好き/like」を `chuayo.mp3`、「やめて/やめろ/stop」を登録済み効果音に置換し、文の前後をVOICEVOXで読み上げ
+- URLを読み上げず「リンク省略」と案内する設定、ドメイン読み、英字略語の読み替え、管理者向け読み上げチャンネル管理
+- /dict の辞書登録で人名・固有名詞・英字などの読み方を修正
+- `.bot-settings.json` に読み上げチャンネル、入退室通知、URL設定、辞書、誕生日、ステージ予定を保存（Git管理対象外）
 
-## 運用構成
+## 必要なもの
 
-| 部品 | 実行場所 | 用途 |
-|---|---|---|
-| Discord Bot | Windows PC | Discordからメッセージを受け取り、音声を再生 |
-| VOICEVOX Engine | 同じPC | 通常の読み上げ音声を合成 |
-| GPT-SoVITS | 同じPC（任意） | スピキモードの音声を合成 |
-| GitHub | コード保管・更新 | ソースコードを取得・更新 |
+- Node.js 24.17 以上
+- Discord Developer Portal のアプリ/Bot
+- Windows 10/11 PC
 
-VOICEVOX Engineは `http://127.0.0.1:50021` でBotから接続します。APIをLANやインターネットに公開しないでください。PCがスリープまたは電源オフになるとBotも停止します。
+VOICEVOX Windows版を使います。まずはCPU版で起動を確認し、必要に応じてGPU版を選んでください。使用する話者の利用規約とクレジット表記も確認してください。
 
-## 初回セットアップ
+## セットアップ
 
-### 必要なもの
+この方法なら、VOICEVOXのWindows版とNode.jsを直接起動できます。
 
-- Windows 10/11
-- Node.js 24.17以上
-- Git
-- Windows版VOICEVOX（最初はCPU版がおすすめ）
-- Discord Developer PortalのアプリとBot
-- GPT-SoVITS（スピキモードを使う場合のみ）
+1. Node.js 24.17以上とVOICEVOX Windows版をインストールします。VOICEVOXはCPU版から始めます。
+2. VOICEVOXを起動し、EngineのAPIドキュメント `http://127.0.0.1:50021/docs` が開くことを確認します。
+3. このリポジトリをPCへダウンロードまたはcloneし、PowerShellでリポジトリのフォルダーを開きます。
+4. `Copy-Item .env.example .env` を実行し、`.env`を編集します。再生成した `DISCORD_TOKEN`、Developer Portalの `CLIENT_ID`、Discordの `GUILD_ID`、読み上げ元の `TEXT_CHANNEL_IDS` を設定します。IDはカンマ区切りで複数指定できます。
+5. `npm.cmd install` を実行します。
+6. `npm.cmd run deploy:commands` を実行し、その後 `npm.cmd start` でBotを起動します。
+7. DiscordでBotが対象サーバーに参加していることを確認し、読み上げたいボイスチャンネルに入って `/join` を実行します。
 
-### 1. Discord Botを準備する
+Developer PortalでMessage Content Intentを有効にしてください。Botが読むのは `.env` に登録したチャンネルIDだけです。ボイスチャンネル内チャットも対象にする場合は、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。PCがスリープまたは電源オフになるとBotも停止します。
 
-1. Discord Developer PortalでアプリとBotを作成し、Botトークンを発行します。
-2. Bot設定の **Message Content Intent** を有効にします。投稿本文を読み上げるために必要です。
-3. Botを対象サーバーへ招待し、テキストチャンネルの閲覧・メッセージ履歴閲覧と、ボイスチャンネルの接続・発言を許可します。
+## GPT-SoVITSの参照音声モード（Windows）
 
-### 2. コードを取得する
+GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバインドします。GPT-SoVITS側の起動方法は公式READMEと`api_v2.py`のWebAPI説明を参照してください。APIは`POST /tts`へ読み上げ本文、参照音声のパス、参照音声の書き起こしを送り、WAVを返します。
 
-PowerShellで次を実行します。
+1. GPT-SoVITSに付属するAPI起動スクリプトを実行し、APIを `http://127.0.0.1:9880` で起動します。APIのウィンドウはBotを使っている間開いたままにしてください。
+2. ZIPの音声は `assets/gpt-sovits/raw/`、韓国語参照音声は `assets/gpt-sovits/reference/supiki-korean-reference.wav` にあります（16.60秒、モノラル32kHz）。
+3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は GPT_SOVITS_PROMPT_FREE=true にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で選んだ言語に対応する参照ペアが使われます。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した1言語の予備設定です。`auto`は日本語・韓国語・英語などが混ざる生成文を自動で切り分けます。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
+4. Botを再起動して `/supiki enabled:true` にします。GPT-SoVITSの応答は生成完了後に再生されるため、VOICEVOXより開始が遅れることがあります。
 
-```powershell
-Set-Location "$env:USERPROFILE\Documents"
-git clone https://github.com/26cm0120-alt/Discord-Bot.git
-Set-Location .\Discord-Bot
-npm ci
-```
+ZIPの13本は合計約36.9秒で、韓国語M4Aは追加学習ではなく参照音声合成に使います。`GPT_SOVITS_REF_TEXT`には参照音声の正確な書き起こしを設定してください。音声ファイルはローカル専用としてGit管理から除外しています。
 
-### 3. `.env`を設定する
+/setvoice speaker:<話者名> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整します。話者は入力候補から名前で選び、/speaker でも変更できます。/voices page:<番号> は話者名一覧を15種類ずつ表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
 
-雛形を作り、メモ帳で開きます。
+## ステージローテーション
 
-```powershell
-Copy-Item .env.example .env
-notepad .env
-```
+- `/season` は今月の予定を表示します。`/season year:<年> month:<月>` で別の月も確認できます。
+- 管理者は `/season year:<年> month:<月> schedule:<予定>` で月間予定を登録します。入力欄には1日ごとに `日付: ステージA、ステージB` と書き、複数日を改行で並べます。日付は `5:`、`11/5:`、`11月5日(木):` のいずれでも登録できます。
+- 例: `5: 全ステージ`、`6: でらクランクストリート、けっこいスターパーク、東西たかさん広場、妖華帝都ケルパーズの散歩道`。1つの日付に複数ステージを登録できます。
+- 予定を登録するとき `channel:<チャンネル>` で通知先を指定します。省略すると、予定登録を実行したチャンネルが通知先になります。通知先だけを変える場合は `/season channel:<チャンネル>` を使います。
+- 登録済みの日は日本時間の日付が変わった後、「今日のステージローテーションは○○です。」と投稿します。Bot起動時にも当日の未投稿分を確認し、投稿に失敗した場合は再試行します。
+- 予定は `.bot-settings.json` に保存されます。月間予定を再登録すると、その月の既存予定は入力内容に置き換わります。Botには通知先の閲覧・メッセージ送信権限を付けてください。
 
-次の値を設定してください。
+## 誕生日コマンド
 
-- `DISCORD_TOKEN`: Botトークン
-- `CLIENT_ID`: Developer Portalに表示されるアプリケーションID
-- `GUILD_ID`: 対象サーバーID
-- `TEXT_CHANNEL_IDS`: 読み上げるテキストチャンネルID（複数はカンマ区切り）
+- `/birthday set month:<月> day:<日> channel:<チャンネル>` で自分の誕生日を登録します。投稿先を省略すると、コマンドを実行したチャンネルを使います。
+- 日本時間で日付が変わると、投稿先に「今日は○○さんの誕生日です。おめでとうございます。」と投稿します。Bot起動時にも当日の未投稿分を確認し、投稿に失敗した場合は再試行します。
+- `/birthday list` で登録一覧を確認し、`/birthday remove` で自分の登録を削除します。誕生日は年を保存せず、登録内容は `.bot-settings.json` に保存されます。
+- 2月29日はうるう年にだけ通知します。Botに投稿先チャンネルの閲覧・メッセージ送信権限を付けてください。
 
-ボイスチャンネル内チャットも読み上げる場合は、そのボイスチャンネルIDも `TEXT_CHANNEL_IDS` に加えます。トークンや実際のIDをGitHubに貼り付けたり、コミットしたりしないでください。
 
-### 4. スラッシュコマンドを登録して起動する
+対象語句を文中で効果音に置き換えます。対象語だけを単独で送った場合（句読点のみの付加も含む）は、効果音にせずVOICEVOXでその語を読みます。話者候補はVOICEVOX Engineの `/speakers` から取得するため、話者一覧を使う際はEngineを起動してください。
 
-```powershell
-npm run deploy:commands
-npm start
-```
+`好き`、英単語の `like/likes/liked/liking` を含む箇所は `chuayo.mp3` に置換します。`やめて`、`やめてください`、`やめてくれ`、`やめなさい`、`やめてよ`、`やめろ`、英単語の `stop/stops/stopped/stopping` は登録済みの効果音に置換します。効果音の前後に残る文章はVOICEVOXで読み、同じ投稿内の順番を保ちます。
 
-Botが起動したら、Discordで読み上げ先のボイスチャンネルに入り、`/join` を実行します。スラッシュコマンドの定義を変更したときは、`npm run deploy:commands` を再実行してください。
+`ああう あ うああ`（スペースなし・全角スペースも可）が投稿内にある場合は、今回登録した1つの音声クリップを再生します。単独投稿でもこのフレーズは効果音になり、前後に文章があればその文章をVOICEVOXで読み上げます。
 
-## 起動と更新
+`お掃除` または `掃除` は `murugorureziru.mp3`、`ダメ` または `嫌` は `morijabadangizibazeyo.mp3` に置き換えます。これらの語が文中にある場合に効果音を使い、前後の文章はVOICEVOXで読み上げます。語だけの投稿はVOICEVOXで読み上げます。
 
-### 毎回の起動
+`かくれんぼ` または `隠れる` は `sunbakochi.mp3`、`かぼちゃ` または `パンプキン` は `squash.mp3` に置き換えます。これらの語が文中にある場合に効果音を使い、語だけの投稿はVOICEVOXで読み上げます。効果音クリップは音量30%、読み上げ音声は `TTS_PLAYBACK_VOLUME`（既定値0.65）で再生します。
 
-1. VOICEVOX Windows版を起動し、`http://127.0.0.1:50021/docs` が開くことを確認します。
-2. PowerShellでBotのフォルダーへ移動して起動します。
+`links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが」→ `speaki.mp3` →「しにきました。」、退出時は「○○さんが」→ `deruzibazeyoonly.mp3` →「しました。」の順に再生します。読み上げと効果音は一つの読み上げ列項目として扱い、途中に別の読み上げが割り込みません。
 
-```powershell
-Set-Location "$env:USERPROFILE\Documents\Discord-Bot"
-npm start
-```
+## 遅延の見方
 
-GPT-SoVITSのスピキモードを使う日は、後述のAPIも起動しておきます。
+`/queue` とBotのログに次の内訳が出ます。
 
-### GitHubからコードを更新する
+- `queueWaitMs`: メッセージ受信から合成開始まで
+- `synthesisMs`: VOICEVOXの合成時間
+- `playbackStartMs`: メッセージ受信から音声プレイヤーが再生を始めるまで
 
-Botを停止してから、リポジトリのフォルダーで実行します。
+`queueWaitMs` が長い場合は読み上げ列が原因です。`synthesisMs` が長い場合はマシン負荷、話者・文章長、Engine側が原因です。`playbackStartMs`だけが長い場合は接続や音声送信経路を調べます。
 
-```powershell
-git pull
-npm ci
-npm start
-```
+## 制限と次の改善
 
-依存パッケージに変更がないと分かっている場合、`npm ci` は省略できます。`.env`と`.bot-settings.json`はGitHubから取得・送信されません。
+- 話者IDはメンバーごとにメモリ上で保持するため、Bot再起動で初期化されます。
+- 待ち列もメモリ上です。停止・再起動で消えます。
+- VOICEVOX Engineが停止した場合は読み上げできません。
+- Botが参加した後、`.env` で指定したテキストチャンネルだけを読み上げます。
+- 読み上げ元が複数でも、音声の出力先は `/join` で接続したボイスチャンネル1つです。ボイスチャンネル内チャットも読み上げる場合、そのボイスチャンネルのIDを `TEXT_CHANNEL_IDS` に加えます。同チャット用に別のチャンネルIDを作る必要はありません。
+- より短い初動時間が必要なら、VOICEVOXの `/streaming_synthesis` とストリーム音声再生への変更を検討します。まずは現在の内訳を測り、合成待ちと接続待ちを分けてから最適化します。
 
-## 機能とコマンド
+## 設定ファイルとトークン
 
-### 読み上げと音声
-
-- `/join`、`/leave`: ボイスチャンネルへ接続・退出
-- `/say`: 指定した文章を読み上げ
-- `/skip`: 再生中の文章をスキップ
-- `/queue`: 待ち列と遅延の計測値を表示
-- `/voice`、`/voices`: 話者の確認・選択
-- `/setvoice`: 話者、速度、高さを調整
-- `/supiki enabled:true|false`: 自分の投稿をスピキモードに切り替え
-
-話者候補はVOICEVOX Engineから取得するため、一覧を使うときはEngineを起動してください。スピキモードはBot再起動後に通常モードへ戻ります。
-
-### 読み上げ設定
-
-- `/readch`: 読み上げるテキストチャンネルを追加・削除
-- `/dict`: 固有名詞や英字などの読み方を辞書に登録
-- `/setting announcements:true|false links:omit|domain|keep`: 入退室案内とURLの読み方を設定
-
-`/readch`、`/dict`、`/setting` の設定は `.bot-settings.json` に保存されます。このファイルはPC内にあり、GitHubには含まれません。
-
-### 誕生日と月間予定
-
-- `/birthday set month:<月> day:<日> channel:<チャンネル>`: 誕生日を登録
-- `/birthday list`、`/birthday remove`: 登録一覧の確認・削除
-- `/season`: 今月の予定を表示
-- `/season year:<年> month:<月>`: 指定月の予定を表示
-- `/season year:<年> month:<月> schedule:<予定>`: 管理者が予定を登録
-
-予定は1日ごとに `日付: ステージA、ステージB` と書き、複数日は改行で並べます。日付は `5:`、`11/5:`、`11月5日(木):` の形式が使えます。通知先は `channel:<チャンネル>` で指定でき、省略時はコマンドを実行したチャンネルです。予定の通知は日本時間の日付が変わった後に行われます。誕生日と予定は `.bot-settings.json` に保存されます。
-
-### 読み上げの動作
-
-- メッセージ本文をデータベースやログに保存しません。
-- `TEXT_CHANNEL_IDS` に設定したチャンネルだけを読み上げます。読み上げ元が複数でも、音声の出力先はBotが接続しているボイスチャンネル1つです。
-- 同じ文章と話者の音声をキャッシュし、読み上げ待ち列の上限を設定できます。
-- `links:omit` はURLを読まず「リンク省略」と案内します。`domain` はドメイン名を読み、`keep` はURLを読み上げます。
-- 文中の「好き」や英語の `like/likes/liked/liking` を `chuayo.mp3` に、「やめて」「やめろ」や `stop/stops/stopped/stopping` を `notviolence.mp3` に置き換えます。対象語だけの投稿は効果音にせず、VOICEVOXで読みます。
-- 入室時は案内音声と `speaki.mp3`、退出時は案内音声と `deruzibazeyoonly.mp3` を順番に再生します。音声は一つの読み上げ項目として扱い、途中に別の読み上げが割り込みません。
-
-## GPT-SoVITSを使う（任意）
-
-GPT-SoVITSはスピキモード用です。VOICEVOXの通常読み上げは引き続きVOICEVOX Engineが担当します。ローカル構成ではGPT-SoVITS APIを `127.0.0.1:9880` だけにバインドし、ポートを外部公開しないでください。
-
-1. GPT-SoVITSフォルダー内の `start-gpt-sovits-api.bat` を実行します。Botを使う間はAPIのウィンドウを開いたままにします。
-2. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880` を設定します。
-3. `GPT_SOVITS_REF_AUDIO_PATH` に参照音声の絶対パス、`GPT_SOVITS_REF_TEXT` にその音声の正確な書き起こしを設定します。参照音声はローカルに置き、GitHubへアップロードしないでください。
-4. Botを再起動し、Discordで `/supiki enabled:true` を実行します。
-
-GPT-SoVITSは音声生成が終わってから再生するため、VOICEVOXより開始が遅くなることがあります。PCの負荷を抑えるため、重い音声処理を同時に多重実行しないでください。
-
-## 遅延の確認と制限
-
-`/queue` とBotのログで次の値を確認できます。
-
-| 値 | 意味 |
-|---|---|
-| `queueWaitMs` | メッセージ受信から音声合成開始までの待ち時間 |
-| `synthesisMs` | 音声の合成にかかった時間 |
-| `playbackStartMs` | メッセージ受信から再生開始までの時間 |
-
-待ち時間が長い場合は読み上げ列、合成時間が長い場合はPCの負荷・文章の長さ・話者・Engineを確認します。再生開始だけが遅い場合はDiscordの接続や音声経路を確認します。遅延ゼロは保証できず、回線やPCの負荷にも左右されます。
-
-- 待ち列とメンバーごとの話者IDはメモリ上にあり、Bot再起動で消去・初期化されます。
-- VOICEVOX Engineが停止すると、通常の読み上げはできません。
-- 誕生日と月間予定などのBot設定は `.bot-settings.json` に保存されます。
-- 利用するVOICEVOX話者の利用規約とクレジット表記を確認してください。
-
-## VPS運用を再開するとき（現在保留）
-
-現在はWindows PCでまとめて運用するため、以下は実行しません。A1 FlexなどのVPSを再開するときの参考情報です。
-
-### VPSへのデプロイ
-
-1. Linux VPSにDocker EngineとDocker Composeを用意し、SSHユーザーが `/opt/discord-tts-bot` に書き込めるようにします。
-2. GitHubの **Settings → Secrets and variables → Actions** に `DISCORD_TOKEN`、`VPS_HOST`、`VPS_USER`、`VPS_SSH_KEY`、`VPS_KNOWN_HOSTS` をRepository secretsとして登録します。
-3. **Variables** に `CLIENT_ID`、`GUILD_ID`、`TEXT_CHANNEL_IDS`、`VOICEVOX_SPEAKER_ID` を登録します。
-4. **Actions → Deploy Discord TTS bot → Run workflow** を実行します。ワークフローはSSHでVPSへコードと設定を送り、Docker Composeで起動します。実トークンはGitHubのコードに書かず、Actions Secretで管理してください。
-
-デプロイワークフローは手動実行のみで、Pull Requestでは動きません。
-
-### VPSから自宅PCのGPT-SoVITSを使う
-
-この構成ではPC、GPT-SoVITS API、Tailscaleを常時オンラインにします。9880番ポートをインターネットに公開せず、Tailscale内だけで接続します。
-
-1. VPSとPCを同じTailscaleネットワークに参加させます。
-2. Windows PCでGPT-SoVITS APIを起動し、別のPowerShellで `tailscale serve --bg --http=9881 9880` を実行します。
-3. PCで `tailscale ip -4` を実行し、Tailscale IPを使ってVPS側の `GPT_SOVITS_URL=http://<PCのTailscale IP>:9881` を設定します。
-4. VPS側の `GPT_SOVITS_REF_AUDIO_PATH` と `GPT_SOVITS_REF_TEXT` には、GPT-SoVITSを動かすPCから読める音声ファイルパスと正確な書き起こしを設定します。
-
-Tailscale Funnelや公開ポート転送は使わないでください。
+`.env` と `.bot-settings.json` はローカル専用です。Discord Botトークンは `.env` にだけ保存し、GitHubへコミットしないでください。`.env.example` は値の入っていない設定テンプレートです。

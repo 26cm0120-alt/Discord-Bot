@@ -32,7 +32,14 @@ const config = {
   gptSovitsUrl: process.env.GPT_SOVITS_URL ?? "http://127.0.0.1:9880",
   gptSovitsReferenceAudioPath: process.env.GPT_SOVITS_REF_AUDIO_PATH ?? "",
   gptSovitsReferenceText: process.env.GPT_SOVITS_REF_TEXT ?? "",
+  gptSovitsPromptLanguage: process.env.GPT_SOVITS_PROMPT_LANG ?? "ja",
+  gptSovitsReferenceAudioPathJa: process.env.GPT_SOVITS_REF_AUDIO_PATH_JA ?? "",
+  gptSovitsReferenceTextJa: process.env.GPT_SOVITS_REF_TEXT_JA ?? "",
+  gptSovitsReferenceAudioPathKo: process.env.GPT_SOVITS_REF_AUDIO_PATH_KO ?? "",
+  gptSovitsReferenceTextKo: process.env.GPT_SOVITS_REF_TEXT_KO ?? "",
+  gptSovitsTextLanguage: process.env.GPT_SOVITS_TEXT_LANG ?? "auto",
   gptSovitsTimeoutMs: Number(process.env.GPT_SOVITS_TIMEOUT_MS ?? 60000),
+  gptSovitsPromptFree: process.env.GPT_SOVITS_PROMPT_FREE === "true",
   supikiVoiceSettings: {
     speedScale: Number(process.env.SUPIKI_SPEED_SCALE ?? 1.12),
     pitchScale: Number(process.env.SUPIKI_PITCH_SCALE ?? 0.08),
@@ -42,8 +49,21 @@ const config = {
   linkSpeechMode: process.env.LINK_SPEECH_MODE ?? "omit",
   maxMessageChars: Number(process.env.MAX_MESSAGE_CHARS ?? 240),
   maxQueueItems: Number(process.env.MAX_QUEUE_ITEMS ?? 30),
+  ttsPlaybackVolume: Number.parseFloat(process.env.TTS_PLAYBACK_VOLUME ?? "0.65"),
   voiceReadyTimeoutMs: Number(process.env.VOICE_READY_TIMEOUT_MS ?? 15000),
 };
+function loadGptSovitsReferenceSet(language) {
+  const suffix = language.toUpperCase();
+  const indexes = Object.keys(process.env)
+    .map((key) => key.match(new RegExp(`^GPT_SOVITS_REF_AUDIO_PATH_${suffix}_(\\d+)$`)))
+    .filter(Boolean)
+    .map((match) => Number(match[1]))
+    .sort((a, b) => a - b);
+  return indexes.map((index) => ({
+    audioPath: process.env[`GPT_SOVITS_REF_AUDIO_PATH_${suffix}_${index}`] ?? "",
+    text: process.env[`GPT_SOVITS_REF_TEXT_${suffix}_${index}`] ?? "",
+  })).filter((reference) => reference.audioPath.trim() && reference.text.trim());
+}
 if (!config.token || !config.guildId || config.envTextChannelIds.length === 0) {
   throw new Error(".env の DISCORD_TOKEN, GUILD_ID, TEXT_CHANNEL_IDS を設定してください。");
 }
@@ -54,6 +74,7 @@ const defaultSettings = {
   announceVoiceEvents: config.announceVoiceEvents,
   linkSpeechMode: ["omit", "domain", "keep"].includes(config.linkSpeechMode) ? config.linkSpeechMode : "omit",
   dictionary: [],
+  gptSovitsLanguages: {},
   birthdays: [],
   seasonEntries: [],
   seasonChannelId: null,
@@ -72,6 +93,9 @@ const guildSettings = {
   ...savedSettings,
   textChannelIds: Array.isArray(savedSettings.textChannelIds) ? savedSettings.textChannelIds : defaultSettings.textChannelIds,
   dictionary: Array.isArray(savedSettings.dictionary) ? savedSettings.dictionary : [],
+  gptSovitsLanguages: savedSettings.gptSovitsLanguages && typeof savedSettings.gptSovitsLanguages === "object" && !Array.isArray(savedSettings.gptSovitsLanguages)
+    ? savedSettings.gptSovitsLanguages
+    : {},
   birthdays: Array.isArray(savedSettings.birthdays) ? savedSettings.birthdays : [],
   seasonEntries: Array.isArray(savedSettings.seasonEntries) ? savedSettings.seasonEntries : [],
 };
@@ -98,11 +122,20 @@ const gptSovitsTts = new GptSovitsClient({
   baseUrl: config.gptSovitsUrl,
   referenceAudioPath: config.gptSovitsReferenceAudioPath,
   referenceText: config.gptSovitsReferenceText,
+  promptLanguage: config.gptSovitsPromptLanguage,
+  referenceAudioPathJa: config.gptSovitsReferenceAudioPathJa,
+  referenceTextJa: config.gptSovitsReferenceTextJa,
+  referenceAudioPathKo: config.gptSovitsReferenceAudioPathKo,
+  referenceTextKo: config.gptSovitsReferenceTextKo,
+  referencesJa: loadGptSovitsReferenceSet("ja"),
+  referencesKo: loadGptSovitsReferenceSet("ko"),
+  textLanguage: config.gptSovitsTextLanguage,
   timeoutMs: config.gptSovitsTimeoutMs,
+  promptFree: config.gptSovitsPromptFree,
 });
 const player = createAudioPlayer();
 const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
-let voiceClips = { join: null, leave: null, like: null, stop: null };
+let voiceClips = { join: null, leave: null, like: null, stop: null, phrase: [], clean: null, dislike: null, hide: null, pumpkin: null };
 try {
   const encodedClips = JSON.parse(readFileSync(voiceClipsPath, "utf8"));
   voiceClips = {
@@ -110,12 +143,26 @@ try {
     leave: Buffer.from(encodedClips.leave ?? "", "base64"),
     like: Buffer.from(encodedClips.like ?? "", "base64"),
     stop: Buffer.from(encodedClips.stop ?? "", "base64"),
+    phrase: [encodedClips.aau, encodedClips.a, encodedClips.uaa].every(Boolean)
+      ? [encodedClips.aau, encodedClips.a, encodedClips.uaa].map((clip) => Buffer.from(clip, "base64"))
+      : encodedClips.phrase
+        ? [Buffer.from(encodedClips.phrase, "base64")]
+        : [encodedClips.aau, encodedClips.a, encodedClips.uaa]
+          .filter(Boolean)
+          .map((clip) => Buffer.from(clip, "base64")),
+    clean: Buffer.from(encodedClips.murugorureziru ?? "", "base64"),
+    dislike: Buffer.from(encodedClips.morijabadangizibazeyo ?? "", "base64"),
+    hide: Buffer.from(encodedClips.sunbakochi ?? "", "base64"),
+    pumpkin: Buffer.from(encodedClips.squash ?? "", "base64"),
   };
 } catch (error) {
   console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
 }
 const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
+const gptSovitsLanguageByUser = new Map(
+  Object.entries(guildSettings.gptSovitsLanguages).filter(([, language]) => ["auto", "ja", "ko"].includes(language)),
+);
 let connection = null;
 let lastMetric = null;
 const intentionalDisconnects = new WeakSet();
@@ -123,6 +170,7 @@ const queue = new SpeechQueue({
   player,
   tts,
   maxItems: config.maxQueueItems,
+  ttsVolume: config.ttsPlaybackVolume,
   onMetric: (metric) => {
     lastMetric = metric;
     console.log(JSON.stringify({ event: "speech_started", ...metric }));
@@ -195,11 +243,16 @@ function normalizeForSpeech(input) {
   return text.trim().slice(0, config.maxMessageChars);
 }
 
-const soundCuePattern = /好き|(?<![A-Za-z])(?:like(?:s|d)?|liking)(?![A-Za-z])|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|(?<![A-Za-z])stop(?:s|ped|ping)?(?![A-Za-z])/giu;
-const standaloneSoundCuePattern = /^(?:好き|like(?:s|d)?|liking|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|stop(?:s|ped|ping)?)[\s。.!！?？、,]*$/iu;
+const soundCuePattern = /ああう\s*あ\s*うああ|お掃除|掃除|ダメ|嫌|かくれんぼ|隠れる|かぼちゃ|パンプキン|好き|(?<![A-Za-z])(?:like(?:s|d)?|liking)(?![A-Za-z])|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|(?<![A-Za-z])stop(?:s|ped|ping)?(?![A-Za-z])/giu;
+const standaloneSoundCuePattern = /^(?:お掃除|掃除|ダメ|嫌|かくれんぼ|隠れる|かぼちゃ|パンプキン|好き|like(?:s|d)?|liking|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|stop(?:s|ped|ping)?)[\s。.!！?？、,]*$/iu;
+const standalonePhrasePattern = /^ああう\s*あ\s*うああ[\s。.!！?？、,]*$/iu;
 
 function buildSpeechSegments(input) {
   const text = replaceLinks(input.slice(0, config.maxMessageChars).replace(/\s+/g, " ")).trim();
+  if (standalonePhrasePattern.test(text)) {
+    const clips = voiceClips.phrase.filter((buffer) => buffer.length > 0);
+    return clips.length ? clips.map((buffer) => ({ type: "audio", buffer })) : [{ type: "text", text }];
+  }
   if (standaloneSoundCuePattern.test(text)) return [{ type: "text", text }];
   const segments = [];
   let cursor = 0;
@@ -207,9 +260,26 @@ function buildSpeechSegments(input) {
     const index = match.index ?? 0;
     if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
     const cue = match[0].toLowerCase();
-    const clip = cue === "好き" || ["like", "likes", "liked", "liking"].includes(cue)
-      ? voiceClips.like
-      : voiceClips.stop;
+    if (standalonePhrasePattern.test(match[0])) {
+      if (voiceClips.phrase.length) {
+        segments.push(...voiceClips.phrase.map((buffer) => ({ type: "audio", buffer })));
+      } else {
+        segments.push({ type: "text", text: match[0] });
+      }
+      cursor = index + match[0].length;
+      continue;
+    }
+    const clip = ["お掃除", "掃除"].includes(match[0])
+      ? voiceClips.clean
+      : ["ダメ", "嫌"].includes(match[0])
+        ? voiceClips.dislike
+        : ["かくれんぼ", "隠れる"].includes(match[0])
+          ? voiceClips.hide
+          : ["かぼちゃ", "パンプキン"].includes(match[0])
+            ? voiceClips.pumpkin
+            : cue === "好き" || ["like", "likes", "liked", "liking"].includes(cue)
+              ? voiceClips.like
+              : voiceClips.stop;
     segments.push(clip?.length ? { type: "audio", buffer: clip } : { type: "text", text: match[0] });
     cursor = index + match[0].length;
   }
@@ -227,13 +297,16 @@ function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
     return [];
   });
   const text = normalizedSegments.filter((segment) => segment.type === "text").map((segment) => segment.text).join(" ");
-  if (!text) return { accepted: false, position: null, reason: "empty" };
+  if (!normalizedSegments.length) return { accepted: false, position: null, reason: "empty" };
   const preference = voicePreferencesByUser.get(authorId) ?? {};
   const isSupiki = supikiUsers.has(authorId);
   const voiceSettings = isSupiki
     ? config.supikiVoiceSettings
     : Object.fromEntries(["speedScale", "pitchScale", "intonationScale"].filter((key) => Number.isFinite(preference[key])).map((key) => [key, preference[key]]));
-  const synthesizer = isSupiki && config.supikiTtsProvider === "gpt-sovits" ? gptSovitsTts : tts;
+  const textLanguage = gptSovitsLanguageByUser.get(authorId) ?? config.gptSovitsTextLanguage;
+  const synthesizer = isSupiki && config.supikiTtsProvider === "gpt-sovits"
+    ? { synthesize: (text) => gptSovitsTts.synthesize(text, textLanguage) }
+    : tts;
   return queue.enqueue({
     text,
     segments: normalizedSegments,
@@ -500,6 +573,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           "`/say text:<文章>` — 文章を直接読み上げ。`/skip` — 再生中をスキップ。`/queue` — 待ち状況。",
           "`/setvoice speaker/speed/pitch` — 話者は名前から候補選択。`/speaker` — 話者変更。`/voice` — 自分の設定。`/voices page:<番号>` — 全話者一覧。",
           "`/supiki enabled:true/false` — 自分の投稿をスピキ風/通常に切替。",
+          "`/supiki-language language:auto|ja|ko` — GPT-SoVITSの読み上げ言語を自分用に設定。",
           "`/dict add|remove|list` — 読み方辞書。`/readch add|remove|list` — 読み上げ対象チャンネル。",
           "`/birthday set month day [channel]` — 誕生日とお祝い投稿先を登録。`/birthday list` — 一覧。`/birthday remove` — 自分の登録を削除。投稿は日本時間の日付が変わった後に行われます。",
           "`/season` — 今月のローテーションを表示。`/season year month schedule` — 月間予定を登録（管理者）。登録時に通知先を選べます。",
@@ -571,6 +645,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === "supiki-language") {
+      const language = interaction.options.getString("language", true);
+      if (!["auto", "ja", "ko"].includes(language)) {
+        await interaction.reply({ content: "言語は auto、ja、ko から選択してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      supikiUsers.add(interaction.user.id);
+      gptSovitsLanguageByUser.set(interaction.user.id, language);
+      guildSettings.gptSovitsLanguages[interaction.user.id] = language;
+      saveGuildSettings();
+      const languageLabel = { auto: "自動判定", ja: "日本語", ko: "韓国語" }[language];
+      await interaction.reply({
+        content: `GPT-SoVITSの読み上げ言語を${languageLabel}に設定し、スピキモードをONにしました。通常のVOICEVOXへ戻すには /supiki enabled:false を実行してください。`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     if (interaction.commandName === "speaker" || interaction.commandName === "setvoice") {
       const preference = { ...(voicePreferencesByUser.get(interaction.user.id) ?? {}) };
       const speakerValue = interaction.options.getString("speaker");
@@ -608,7 +700,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const preference = voicePreferencesByUser.get(interaction.user.id) ?? {};
       const speakerLabel = await getSpeakerLabel(preference.speakerId ?? config.defaultSpeakerId);
       await interaction.reply({
-        content: `話者: ${speakerLabel}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}`,
+        content: `話者: ${speakerLabel}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}\nGPT-SoVITS言語: ${{ auto: "自動", ja: "日本語", ko: "韓国語" }[gptSovitsLanguageByUser.get(interaction.user.id) ?? config.gptSovitsTextLanguage]}`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -850,5 +942,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
-
 

@@ -2,10 +2,11 @@ import { Readable } from "node:stream";
 import { createAudioResource, AudioPlayerStatus } from "@discordjs/voice";
 
 export class SpeechQueue {
-  constructor({ player, tts, maxItems, onMetric, onError }) {
+  constructor({ player, tts, maxItems, ttsVolume = 0.65, onMetric, onError }) {
     this.player = player;
     this.tts = tts;
     this.maxItems = maxItems;
+    this.ttsVolume = Number.isFinite(ttsVolume) ? Math.min(1, Math.max(0, ttsVolume)) : 0.65;
     this.onMetric = onMetric;
     this.onError = onError;
     this.items = [];
@@ -63,7 +64,8 @@ export class SpeechQueue {
             metrics.synthesisMs += Date.now() - synthesisStartedAt;
           }
           if (!buffer?.length || item.cancelled) continue;
-          const started = await this.playBuffer(buffer, item, metrics, metrics.playbackStartMs === null);
+          const volume = segment.type === "audio" ? 0.3 : this.ttsVolume;
+          const started = await this.playBuffer(buffer, item, metrics, metrics.playbackStartMs === null, volume);
           if (!started) break;
         }
         this.current = null;
@@ -74,7 +76,7 @@ export class SpeechQueue {
     }
   }
 
-  playBuffer(buffer, item, metrics, reportStart) {
+  playBuffer(buffer, item, metrics, reportStart, volume = 1) {
     return new Promise((resolve) => {
       let settled = false;
       let started = false;
@@ -106,7 +108,9 @@ export class SpeechQueue {
       this.player.once(AudioPlayerStatus.Idle, onIdle);
       this.player.once("error", onError);
       try {
-        this.player.play(createAudioResource(Readable.from([buffer])));
+        const resource = createAudioResource(Readable.from([buffer]), { inlineVolume: true });
+        resource.volume.setVolume(volume);
+        this.player.play(resource);
       } catch (error) {
         this.onError(error);
         finish();
@@ -114,5 +118,4 @@ export class SpeechQueue {
     });
   }
 }
-
 
