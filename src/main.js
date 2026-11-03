@@ -20,6 +20,7 @@ import {
 import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
 import { GptSovitsClient } from "./gpt-sovits.js";
+import { splitTextByLanguage } from "./language-segments.js";
 
 const config = {
   token: process.env.DISCORD_TOKEN,
@@ -292,24 +293,29 @@ function buildSpeechSegments(input) {
 }
 
 function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
+  const preference = voicePreferencesByUser.get(authorId) ?? {};
+  const isSupiki = supikiUsers.has(authorId);
+  const usesGptSovits = isSupiki && config.supikiTtsProvider === "gpt-sovits";
+  const textLanguage = gptSovitsLanguageByUser.get(authorId) ?? config.gptSovitsTextLanguage;
   const normalizedSegments = segments.flatMap((segment) => {
     if (segment.type === "text") {
       const text = normalizeForSpeech(segment.text);
-      return text ? [{ type: "text", text }] : [];
+      if (!text) return [];
+      const languageSegments = usesGptSovits
+        ? splitTextByLanguage(text, textLanguage, config.gptSovitsPromptLanguage)
+        : [{ text, textLanguage }];
+      return languageSegments.map((part) => ({ type: "text", ...part }));
     }
     if (segment.type === "audio" && segment.buffer?.length) return [segment];
     return [];
   });
   const text = normalizedSegments.filter((segment) => segment.type === "text").map((segment) => segment.text).join(" ");
   if (!normalizedSegments.length) return { accepted: false, position: null, reason: "empty" };
-  const preference = voicePreferencesByUser.get(authorId) ?? {};
-  const isSupiki = supikiUsers.has(authorId);
   const voiceSettings = isSupiki
     ? config.supikiVoiceSettings
     : Object.fromEntries(["speedScale", "pitchScale", "intonationScale"].filter((key) => Number.isFinite(preference[key])).map((key) => [key, preference[key]]));
-  const textLanguage = gptSovitsLanguageByUser.get(authorId) ?? config.gptSovitsTextLanguage;
-  const synthesizer = isSupiki && config.supikiTtsProvider === "gpt-sovits"
-    ? { synthesize: (text) => gptSovitsTts.synthesize(text, textLanguage) }
+  const synthesizer = usesGptSovits
+    ? { synthesize: (text, _speakerId, _voiceSettings, language) => gptSovitsTts.synthesize(text, language) }
     : tts;
   return queue.enqueue({
     text,
