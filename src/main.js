@@ -135,9 +135,13 @@ const gptSovitsTts = new GptSovitsClient({
 });
 const player = createAudioPlayer();
 const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
+const localVoiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.local.json");
 let voiceClips = { join: null, leave: null, like: null, stop: null, phrase: [], clean: null, dislike: null, hide: null, pumpkin: null };
 try {
   const encodedClips = JSON.parse(readFileSync(voiceClipsPath, "utf8"));
+  if (existsSync(localVoiceClipsPath)) {
+    Object.assign(encodedClips, JSON.parse(readFileSync(localVoiceClipsPath, "utf8")));
+  }
   voiceClips = {
     join: Buffer.from(encodedClips.join ?? "", "base64"),
     leave: Buffer.from(encodedClips.leave ?? "", "base64"),

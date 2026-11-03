@@ -44,6 +44,17 @@ export function normalizePcm16Wav(input) {
   return audio;
 }
 
+function inferReferenceLanguage(text, requestedLanguage, fallbackLanguage) {
+  if (requestedLanguage === "ja" || requestedLanguage === "ko") return requestedLanguage;
+  if (requestedLanguage !== "auto") return null;
+
+  const japaneseCount = (text.match(/[\u3040-\u30ff]/gu) ?? []).length;
+  const koreanCount = (text.match(/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/gu) ?? []).length;
+  if (japaneseCount > koreanCount) return "ja";
+  if (koreanCount > japaneseCount) return "ko";
+  return fallbackLanguage === "ja" || fallbackLanguage === "ko" ? fallbackLanguage : null;
+}
+
 export class GptSovitsClient {
   constructor({
     baseUrl,
@@ -94,12 +105,13 @@ export class GptSovitsClient {
 
   async synthesize(text, textLanguage = this.textLanguage) {
     const language = textLanguage.trim().toLowerCase();
-    const pool = this.references[language];
+    const referenceLanguage = inferReferenceLanguage(text, language, this.promptLanguage);
+    const pool = referenceLanguage ? this.references[referenceLanguage] : null;
     let reference;
     if (pool?.length) {
-      const index = this.referenceIndexes[language] ?? 0;
+      const index = this.referenceIndexes[referenceLanguage] ?? 0;
       reference = pool[index % pool.length];
-      this.referenceIndexes[language] = (index + 1) % pool.length;
+      this.referenceIndexes[referenceLanguage] = (index + 1) % pool.length;
     } else {
       reference = {
         audioPath: this.referenceAudioPath,
@@ -107,7 +119,7 @@ export class GptSovitsClient {
         promptLanguage: this.promptLanguage,
       };
     }
-    const languageSuffix = language === "ja" || language === "ko" ? `_${language.toUpperCase()}` : "";
+    const languageSuffix = referenceLanguage ? `_${referenceLanguage.toUpperCase()}` : "";
     if (!reference.audioPath) {
       throw new Error(`GPT-SoVITS参照音声の絶対パスを GPT_SOVITS_REF_AUDIO_PATH${languageSuffix} に設定してください。`);
     }
