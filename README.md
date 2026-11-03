@@ -50,11 +50,11 @@ Developer PortalでMessage Content Intentを有効にしてください。Botが
 GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバインドします。GPT-SoVITS側の起動方法は公式READMEと`api_v2.py`のWebAPI説明を参照してください。APIは`POST /tts`へ読み上げ本文、参照音声のパス、参照音声の書き起こしを送り、WAVを返します。
 
 1. GPT-SoVITSに付属するAPI起動スクリプトを実行し、APIを `http://127.0.0.1:9880` で起動します。APIのウィンドウはBotを使っている間開いたままにしてください。
-2. ZIPの音声は `assets/gpt-sovits/raw/`、韓国語参照音声は `assets/gpt-sovits/reference/supiki-korean-reference.wav` にあります（16.60秒、モノラル32kHz）。
-3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は GPT_SOVITS_PROMPT_FREE=true にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で選んだ言語に対応する参照ペアが使われます。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した1言語の予備設定です。`auto`は日本語・韓国語・英語などが混ざる生成文を自動で切り分けます。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
+2. 参照音声はリポジトリに含めていません。PC上の音声ファイルを使い、その絶対パスを `.env` に指定してください。APIを実行するPCからファイルを読み取れる必要があります。
+3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は `GPT_SOVITS_PROMPT_FREE=true` にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で選んだ言語に対応する参照ペアが使われます。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した1言語の予備設定です。`auto`は日本語・韓国語・英語などが混ざる生成文を自動で切り分けます。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
 4. Botを再起動して `/supiki enabled:true` にします。GPT-SoVITSの応答は生成完了後に再生されるため、VOICEVOXより開始が遅れることがあります。
 
-ZIPの13本は合計約36.9秒で、韓国語M4Aは追加学習ではなく参照音声合成に使います。`GPT_SOVITS_REF_TEXT`には参照音声の正確な書き起こしを設定してください。音声ファイルはローカル専用としてGit管理から除外しています。
+参照音声は追加学習ではなく、GPT-SoVITSの参照音声合成に使います。
 
 /setvoice speaker:<話者名> speed:<0.5-2.0> pitch:<-0.15-0.15> で自分の声を調整します。話者は入力候補から名前で選び、/speaker でも変更できます。/voices page:<番号> は話者名一覧を15種類ずつ表示します。/dict add word:<表記> reading:<読み> で辞書を追加し、/readch add channel:<チャンネル> で読み上げ元を追加できます。/setting announcements:true links:omit|domain|keep は管理者設定です。/readch・/dict・/setting の変更は .bot-settings.json に保存されます。
 
