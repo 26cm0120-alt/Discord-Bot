@@ -7,10 +7,12 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 ## 機能
 
 - `.env` で指定した複数のテキストチャンネルを読み上げる
-- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` コマンド
+- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/status` `/setvoice` `/voice` `/voices` `/dict` `/readch` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` コマンド
 - `/birthday set` で誕生日を登録し、日本時間の日付が変わると指定チャンネルへお祝いを投稿
 - `/season` で月間ステージローテーションを表示し、管理者が更新した予定を日本時間0時に指定チャンネルへ通知
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
+- `/status` で音声接続、読み上げモード、待ち列、VOICEVOX/GPT-SoVITS APIの応答と一時キャッシュ量を確認
+- GPT-SoVITSの合成音声を最大32件・64 MiBまでメモリ内に一時キャッシュ（Bot停止時に消去）
 - 受信から再生開始までの待ち、合成時間、合計時間の計測
 - `/supiki-language` でGPT-SoVITSの言語を日本語・韓国語・自動から選択
 - 日本語・韓国語それぞれの参照音声を設定し、複数ペアを順番に利用
@@ -51,7 +53,7 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 
 1. GPT-SoVITSに付属するAPI起動スクリプトを実行し、APIを `http://127.0.0.1:9880` で起動します。APIのウィンドウはBotを使っている間開いたままにしてください。
 2. 参照音声はリポジトリに含めていません。PC上の音声ファイルを使い、その絶対パスを `.env` に指定してください。APIを実行するPCからファイルを読み取れる必要があります。
-3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は `GPT_SOVITS_PROMPT_FREE=true` にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で `ja` または `ko` を指定すると、その言語の参照音声を使います。`auto`では読み上げ文のかな・ハングルの多い方を見て参照音声を選び、APIの `text_lang` は `auto` のままにします。日本語と韓国語が混在する一文は、文字数の多い側の参照音声になります。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した言語の予備設定です。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
+3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は `GPT_SOVITS_PROMPT_FREE=true` にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で `ja` または `ko` を指定すると、その言語の参照音声を使います。`auto`では文単位でかな・ハングルの比率を見て日本語・韓国語の文節に分け、順番にそれぞれの参照音声と言語指定で合成します。かなを含む文の漢字は日本語、英数字などは文字数比で優勢な言語に割り当てます。かな・ハングルを含まない文はGPT-SoVITSの自動判定に任せます。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した言語の予備設定です。半角カタカナは文字判定できます。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
 4. Botを再起動して `/supiki enabled:true` にします。GPT-SoVITSの応答は生成完了後に再生されるため、VOICEVOXより開始が遅れることがあります。
 
 参照音声は追加学習ではなく、GPT-SoVITSの参照音声合成に使います。

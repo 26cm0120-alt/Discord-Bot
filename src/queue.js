@@ -56,7 +56,7 @@ export class SpeechQueue {
           if (segment.type === "text") {
             const synthesisStartedAt = Date.now();
             try {
-              buffer = await item.synthesizer.synthesize(segment.text, item.speakerId, item.voiceSettings);
+              buffer = await item.synthesizer.synthesize(segment.text, item.speakerId, item.voiceSettings, segment.textLanguage);
             } catch (error) {
               this.onError(error);
               if (item.synthesizer === this.tts) continue;
