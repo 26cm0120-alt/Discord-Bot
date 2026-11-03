@@ -51,7 +51,7 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 
 1. GPT-SoVITSに付属するAPI起動スクリプトを実行し、APIを `http://127.0.0.1:9880` で起動します。APIのウィンドウはBotを使っている間開いたままにしてください。
 2. 参照音声はリポジトリに含めていません。PC上の音声ファイルを使い、その絶対パスを `.env` に指定してください。APIを実行するPCからファイルを読み取れる必要があります。
-3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は `GPT_SOVITS_PROMPT_FREE=true` にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で選んだ言語に対応する参照ペアが使われます。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した1言語の予備設定です。`auto`は日本語・韓国語・英語などが混ざる生成文を自動で切り分けます。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
+3. `.env`で `SUPIKI_TTS_PROVIDER=gpt-sovits`、`GPT_SOVITS_URL=http://127.0.0.1:9880`、`GPT_SOVITS_TEXT_LANG=auto` を設定します。日本語と韓国語の参照音声は、それぞれ `GPT_SOVITS_REF_AUDIO_PATH_JA` / `GPT_SOVITS_REF_TEXT_JA` と `GPT_SOVITS_REF_AUDIO_PATH_KO` / `GPT_SOVITS_REF_TEXT_KO` で設定できます。複数の日本語参照ペアを使うときは、末尾に `_1`, `_2` のような番号を付けて `GPT_SOVITS_REF_AUDIO_PATH_JA_1` / `GPT_SOVITS_REF_TEXT_JA_1` の組を増やします。Botは番号順に参照ペアをローテーションします。各テキストは対応する3〜10秒の参照音声の正確な書き起こしにします。GPT-SoVITSが参照文の後半まで読み上げてしまう場合は `GPT_SOVITS_PROMPT_FREE=true` にすると参照テキストを送信せず、参照音声の特徴だけを使います。`/supiki-language`で `ja` または `ko` を指定すると、その言語の参照音声を使います。`auto`では読み上げ文のかな・ハングルの多い方を見て参照音声を選び、APIの `text_lang` は `auto` のままにします。日本語と韓国語が混在する一文は、文字数の多い側の参照音声になります。従来形式の `GPT_SOVITS_REF_AUDIO_PATH` / `GPT_SOVITS_REF_TEXT` は `GPT_SOVITS_PROMPT_LANG` で指定した言語の予備設定です。入力文はNFKC正規化されるため、半角カタカナは全角に整えてから送信します。参照音声を別PCのGPT-SoVITS APIが処理する場合は、`ref_audio_path`もそのPCから読めるパスである必要があります。
 4. Botを再起動して `/supiki enabled:true` にします。GPT-SoVITSの応答は生成完了後に再生されるため、VOICEVOXより開始が遅れることがあります。
 
 参照音声は追加学習ではなく、GPT-SoVITSの参照音声合成に使います。
@@ -79,7 +79,7 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 
 `好き`、英単語の `like/likes/liked/liking` を含む箇所は `chuayo.mp3` に置換します。`やめて`、`やめてください`、`やめてくれ`、`やめなさい`、`やめてよ`、`やめろ`、英単語の `stop/stops/stopped/stopping` は登録済みの効果音に置換します。効果音の前後に残る文章はVOICEVOXで読み、同じ投稿内の順番を保ちます。
 
-`カスタム効果音の追加素材はこのPull Requestには含めていません。音声クリップを公開リポジトリへ入れない場合は、各自のローカル設定で管理してください。読み上げ音声は `.env` の `TTS_PLAYBACK_VOLUME`（既定値0.65）で再生し、既存の効果音は音量30%で再生します。
+追加の効果音素材は公開リポジトリへ含めず、`assets/voice-clips.local.json` に置けます。このファイルはGit管理外で、`assets/voice-clips.json` の同名キーを上書きします。既存のローカル効果音ファイルを使う場合は、そのファイルを残して運用してください。読み上げ音声は `.env` の `TTS_PLAYBACK_VOLUME`（既定値0.65）で再生し、効果音は音量30%で再生します。
 
 `links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが」→ `speaki.mp3` →「しにきました。」、退出時は「○○さんが」→ `deruzibazeyoonly.mp3` →「しました。」の順に再生します。読み上げと効果音は一つの読み上げ列項目として扱い、途中に別の読み上げが割り込みません。
 

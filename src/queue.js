@@ -59,9 +59,16 @@ export class SpeechQueue {
               buffer = await item.synthesizer.synthesize(segment.text, item.speakerId, item.voiceSettings);
             } catch (error) {
               this.onError(error);
-              break;
+              if (item.synthesizer === this.tts) continue;
+              try {
+                buffer = await this.tts.synthesize(segment.text, item.speakerId, item.voiceSettings);
+              } catch (fallbackError) {
+                this.onError(new Error(`VOICEVOX fallback also failed: ${fallbackError.message}`));
+                continue;
+              }
+            } finally {
+              metrics.synthesisMs += Date.now() - synthesisStartedAt;
             }
-            metrics.synthesisMs += Date.now() - synthesisStartedAt;
           }
           if (!buffer?.length || item.cancelled) continue;
           const volume = segment.type === "audio" ? 0.3 : this.ttsVolume;
