@@ -45,21 +45,74 @@ export function normalizePcm16Wav(input) {
 }
 
 export class GptSovitsClient {
-  constructor({ baseUrl, referenceAudioPath, referenceText, timeoutMs = 60000 }) {
+  constructor({
+    baseUrl,
+    referenceAudioPath,
+    referenceText,
+    promptLanguage = "ja",
+    referenceAudioPathJa = "",
+    referenceTextJa = "",
+    referenceAudioPathKo = "",
+    referenceTextKo = "",
+    referencesJa = [],
+    referencesKo = [],
+    textLanguage = "auto",
+    timeoutMs = 60000,
+    promptFree = false,
+  }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     // The GPT-SoVITS process, not this bot process, opens this file. Preserve
     // the configured path verbatim so a Linux VPS can pass a Windows PC path.
     this.referenceAudioPath = referenceAudioPath?.trim() ?? "";
     this.referenceText = referenceText?.trim() ?? "";
+    this.promptLanguage = promptLanguage.trim() || "ja";
+    const cleanReferences = (references, language) => Array.isArray(references)
+      ? references
+        .filter((reference) => reference && typeof reference.audioPath === "string" && typeof reference.text === "string")
+        .map((reference) => ({ audioPath: reference.audioPath.trim(), text: reference.text.trim(), promptLanguage: language }))
+        .filter((reference) => reference.audioPath && reference.text)
+      : [];
+    const jaReferences = cleanReferences(referencesJa, "ja");
+    const koReferences = cleanReferences(referencesKo, "ko");
+    this.references = {
+      ja: jaReferences.length ? jaReferences : [{
+        audioPath: referenceAudioPathJa.trim() || (this.promptLanguage === "ja" ? this.referenceAudioPath : ""),
+        text: referenceTextJa.trim() || (this.promptLanguage === "ja" ? this.referenceText : ""),
+        promptLanguage: "ja",
+      }],
+      ko: koReferences.length ? koReferences : [{
+        audioPath: referenceAudioPathKo.trim() || (this.promptLanguage === "ko" ? this.referenceAudioPath : ""),
+        text: referenceTextKo.trim() || (this.promptLanguage === "ko" ? this.referenceText : ""),
+        promptLanguage: "ko",
+      }],
+    };
+    this.referenceIndexes = { ja: 0, ko: 0 };
+    this.textLanguage = textLanguage.trim() || "auto";
     this.timeoutMs = timeoutMs;
+    this.promptFree = promptFree;
   }
 
-  async synthesize(text) {
-    if (!this.referenceAudioPath) {
-      throw new Error("GPT-SoVITS参照音声の絶対パスを GPT_SOVITS_REF_AUDIO_PATH に設定してください。");
+  async synthesize(text, textLanguage = this.textLanguage) {
+    const language = textLanguage.trim().toLowerCase();
+    const pool = this.references[language];
+    let reference;
+    if (pool?.length) {
+      const index = this.referenceIndexes[language] ?? 0;
+      reference = pool[index % pool.length];
+      this.referenceIndexes[language] = (index + 1) % pool.length;
+    } else {
+      reference = {
+        audioPath: this.referenceAudioPath,
+        text: this.referenceText,
+        promptLanguage: this.promptLanguage,
+      };
     }
-    if (!this.referenceText) {
-      throw new Error("参照音声の正確な書き起こしを GPT_SOVITS_REF_TEXT に設定してください。");
+    const languageSuffix = language === "ja" || language === "ko" ? `_${language.toUpperCase()}` : "";
+    if (!reference.audioPath) {
+      throw new Error(`GPT-SoVITS参照音声の絶対パスを GPT_SOVITS_REF_AUDIO_PATH${languageSuffix} に設定してください。`);
+    }
+    if (!this.promptFree && !reference.text) {
+      throw new Error(`参照音声の正確な書き起こしを GPT_SOVITS_REF_TEXT${languageSuffix} に設定してください。`);
     }
 
     const response = await fetch(`${this.baseUrl}/tts`, {
@@ -67,11 +120,11 @@ export class GptSovitsClient {
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(this.timeoutMs),
       body: JSON.stringify({
-        text,
-        text_lang: "ja",
-        ref_audio_path: this.referenceAudioPath,
-        prompt_text: this.referenceText,
-        prompt_lang: "ja",
+        text: text.normalize("NFKC"),
+        text_lang: language,
+        ref_audio_path: reference.audioPath,
+        prompt_text: this.promptFree ? "" : reference.text,
+        prompt_lang: reference.promptLanguage,
         text_split_method: "cut5",
         batch_size: 1,
         media_type: "wav",
@@ -86,4 +139,3 @@ export class GptSovitsClient {
     return normalizePcm16Wav(Buffer.from(await response.arrayBuffer()));
   }
 }
-

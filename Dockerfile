@@ -11,6 +11,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src ./src
+COPY assets ./assets
 USER node
 
 CMD ["node", "src/main.js"]
