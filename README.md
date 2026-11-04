@@ -4,9 +4,11 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 
 「遅延ゼロ」は保証できません。Discordの音声経路、回線、マシン負荷、VOICEVOXの合成時間に左右されるためです。この実装では `/queue` と標準出力の計測値で、待ち時間を分解して確認します。
 
+メンバー向けの操作方法は[取扱説明書](docs/discord-bot-user-manual.md)を参照してください。
+
 ## 機能
 
-- `.env` で指定した複数のテキストチャンネルを読み上げる
+- `/join` を実行した聞き専チャンネルと、Botが接続中のVC内チャットだけを読み上げる
 - `/help` `/join` `/leave` `/say` `/skip` `/queue` `/status` `/setvoice` `/voice` `/voices` `/dict` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` `/community` コマンド
 - `/skip` は接続中VCの参加者のみ使用可能。`/leave` は接続中VCの参加者またはサーバー管理者が使用でき、別VCへの `/join` 切替もサーバー管理者に限定
 - `/birthday set` で誕生日を登録し、日本時間の日付が変わると指定チャンネルへお祝いを投稿
