@@ -7,9 +7,7 @@ import {
   ChannelType,
   Client,
   Events,
-  GatewayIntentBits,
-  MessageFlags,
-  PermissionFlagsBits,
+  GatewayIntentBits,  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -882,13 +880,13 @@ async function handleCommunityComponent(interaction) {
     if (kind !== "recruit" || !["join", "close"].includes(action) || !messageId) return false;
     const recruitment = guildSettings.community.recruitments[messageId];
     if (!recruitment || recruitment.guildId !== config.guildId) {
-      await interaction.reply({ content: "この募集情報は見つからないか、期限切れです。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "この募集情報は見つからないか、期限切れです。" });
       return true;
     }
     if (action === "close") {
       const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
       if (interaction.user.id !== recruitment.hostId && !canManage) {
-        await interaction.reply({ content: "募集を締め切れるのは主催者かサーバー管理者です。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "募集を締め切れるのは主催者かサーバー管理者です。" });
         return true;
       }
       recruitment.closed = true;
@@ -897,11 +895,11 @@ async function handleCommunityComponent(interaction) {
       return true;
     }
     if (recruitment.closed) {
-      await interaction.reply({ content: "この募集は締め切られています。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "この募集は締め切られています。" });
       return true;
     }
     if (interaction.user.id === recruitment.hostId) {
-      await interaction.reply({ content: "主催者はすでに参加者に含まれています。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "主催者はすでに参加者に含まれています。" });
       return true;
     }
     const participants = recruitment.participants ?? (recruitment.participants = []);
@@ -913,7 +911,7 @@ async function handleCommunityComponent(interaction) {
       return true;
     }
     if (participants.length + 1 >= recruitment.capacity) {
-      await interaction.reply({ content: "この募集は満員です。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "この募集は満員です。" });
       return true;
     }
     participants.push(interaction.user.id);
@@ -925,17 +923,17 @@ async function handleCommunityComponent(interaction) {
   if (interaction.isModalSubmit() && interaction.customId === "community:recruit:submit") {
     const audience = interaction.fields.getTextInputValue("audience").trim();
     if (!["初心者歓迎", "誰でも", "経験者向け"].includes(audience)) {
-      await interaction.reply({ content: "参加しやすさは「初心者歓迎」「誰でも」「経験者向け」から選んで入力してください。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "参加しやすさは「初心者歓迎」「誰でも」「経験者向け」から選んで入力してください。" });
       return true;
     }
     const capacity = Number(interaction.fields.getTextInputValue("capacity").trim());
     if (!Number.isInteger(capacity) || capacity < 2 || capacity > 99) {
-      await interaction.reply({ content: "募集人数は主催者を含めて2〜99人で入力してください。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "募集人数は主催者を含めて2〜99人で入力してください。" });
       return true;
     }
     const channel = interaction.channel;
     if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-      await interaction.reply({ content: "サーバー内のテキストチャンネルから募集を作成してください。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "サーバー内のテキストチャンネルから募集を作成してください。" });
       return true;
     }
     const recruitment = {
@@ -957,7 +955,7 @@ async function handleCommunityComponent(interaction) {
     guildSettings.community.recruitments[message.id] = recruitment;
     pruneRecruitments();
     saveGuildSettings();
-    await interaction.reply({ content: `募集を ${channel} に投稿しました。`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `募集を ${channel} に投稿しました。` });
     return true;
   }
   return false;
@@ -969,19 +967,19 @@ async function handleTournamentComponent(interaction) {
   if (scope !== "tournament" || !messageId) return false;
   const tournament = guildSettings.community.tournaments[messageId];
   if (!tournament || tournament.guildId !== config.guildId) {
-    await interaction.reply({ content: "このトーナメントは見つからないか、期限切れです。", flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: "このトーナメントは見つからないか、期限切れです。" });
     return true;
   }
 
   if (action === "join") {
     if (tournament.phase !== "signup") {
-      await interaction.reply({ content: "このトーナメントの参加受付は終了しています。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "このトーナメントの参加受付は終了しています。" });
       return true;
     }
     const index = tournament.participantIds.indexOf(interaction.user.id);
     if (index >= 0) tournament.participantIds.splice(index, 1);
     else if (tournament.participantIds.length >= MAX_TOURNAMENT_PLAYERS) {
-      await interaction.reply({ content: `参加上限の${MAX_TOURNAMENT_PLAYERS}人に達しています。`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `参加上限の${MAX_TOURNAMENT_PLAYERS}人に達しています。` });
       return true;
     } else tournament.participantIds.push(interaction.user.id);
     saveGuildSettings();
@@ -990,17 +988,17 @@ async function handleTournamentComponent(interaction) {
   }
 
   if (!canManageTournament(interaction, tournament)) {
-    await interaction.reply({ content: "抽選の開始や試合結果を操作できるのは主催者かサーバー管理者です。", flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: "抽選の開始や試合結果を操作できるのは主催者かサーバー管理者です。" });
     return true;
   }
 
   if (action === "start") {
     if (tournament.phase !== "signup") {
-      await interaction.reply({ content: "このトーナメントはすでに抽選されています。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "このトーナメントはすでに抽選されています。" });
       return true;
     }
     if (tournament.participantIds.length < 6) {
-      await interaction.reply({ content: "3対3の対戦には6人以上の参加が必要です。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "3対3の対戦には6人以上の参加が必要です。" });
       return true;
     }
     drawTournament(tournament);
@@ -1011,7 +1009,7 @@ async function handleTournamentComponent(interaction) {
 
   if (action === "reroll") {
     if (tournament.phase !== "running" || tournament.hasPlayedMatch) {
-      await interaction.reply({ content: "再抽選できるのは、試合結果を登録する前だけです。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "再抽選できるのは、試合結果を登録する前だけです。" });
       return true;
     }
     drawTournament(tournament);
@@ -1022,13 +1020,13 @@ async function handleTournamentComponent(interaction) {
 
   if (action === "win") {
     if (tournament.phase !== "running") {
-      await interaction.reply({ content: "現在、結果を登録できる試合はありません。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "現在、結果を登録できる試合はありません。" });
       return true;
     }
     const currentRound = tournament.rounds[tournament.currentRoundIndex];
     const match = currentRound?.matches.find((entry) => entry.id === matchId);
     if (!match || match.winnerTeamId || ![match.teamAId, match.teamBId].includes(teamId)) {
-      await interaction.reply({ content: "この試合は終了済みか、結果ボタンが古くなっています。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "この試合は終了済みか、結果ボタンが古くなっています。" });
       return true;
     }
     match.winnerTeamId = teamId;
@@ -1115,8 +1113,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } catch (error) {
       console.error("コミュニティ機能エラー:", error);
       const content = "処理に失敗しました。Botの権限とチャンネル設定を確認してください。";
-      if (interaction.deferred || interaction.replied) await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
-      else await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+      if (interaction.deferred || interaction.replied) await interaction.followUp({ content }).catch(() => {});
+      else await interaction.reply({ content }).catch(() => {});
     }
     return;
   }
@@ -1146,12 +1144,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (subcommand !== "create") return;
       const channel = interaction.channel;
       if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-        await interaction.reply({ content: "サーバー内のテキストチャンネルで実行してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "サーバー内のテキストチャンネルで実行してください。" });
         return;
       }
       const title = interaction.options.getString("title", true).trim();
       if (!title) {
-        await interaction.reply({ content: "イベント名を入力してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "イベント名を入力してください。" });
         return;
       }
       const tournament = {
@@ -1174,7 +1172,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       guildSettings.community.tournaments[message.id] = tournament;
       pruneTournaments();
       saveGuildSettings();
-      await interaction.reply({ content: `3対3トーナメントの参加受付を ${channel} に投稿しました。`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `3対3トーナメントの参加受付を ${channel} に投稿しました。` });
       return;
     }
 
@@ -1182,7 +1180,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "access") {
         if (!(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-          await interaction.reply({ content: "使用できるロールを設定できるのはサーバー管理者です。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "使用できるロールを設定できるのはサーバー管理者です。" });
           return;
         }
         const role = interaction.options.getRole("role");
@@ -1191,14 +1189,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({
           content: role
             ? `${role} とサーバー管理者が /community topics を使えるようになりました。/community panel は全メンバーが使えます。`
-            : "追加の使用ロールを解除しました。今後はサーバー管理者のみ /community topics を使えます。/community panel は全メンバーが使えます。",
-          flags: MessageFlags.Ephemeral,
-        });
+            : "追加の使用ロールを解除しました。今後はサーバー管理者のみ /community topics を使えます。/community panel は全メンバーが使えます。",        });
         return;
       }
       if (subcommand === "prompts") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "話題を管理できるのはサーバー管理者または設定された使用ロールのメンバーです。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "話題を管理できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
           return;
         }
         const action = interaction.options.getString("action", true);
@@ -1206,37 +1202,37 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (action === "add") {
           const text = interaction.options.getString("text")?.trim();
           if (!text) {
-            await interaction.reply({ content: "追加する話題を text に入力してください。", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "追加する話題を text に入力してください。" });
             return;
           }
           if (topics.length >= 30) {
-            await interaction.reply({ content: "登録できる話題は30件までです。不要な話題を削除してから追加してください。", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "登録できる話題は30件までです。不要な話題を削除してから追加してください。" });
             return;
           }
           if (topics.some((topic) => topic.toLocaleLowerCase() === text.toLocaleLowerCase())) {
-            await interaction.reply({ content: "同じ話題がすでに登録されています。", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "同じ話題がすでに登録されています。" });
             return;
           }
           topics.push(text);
           saveGuildSettings();
-          await interaction.reply({ content: `話題を追加しました（${topics.length}件）。登録した話題を週次投稿で順番に使います。`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `話題を追加しました（${topics.length}件）。登録した話題を週次投稿で順番に使います。` });
           return;
         }
         if (action === "remove") {
           const index = interaction.options.getInteger("index");
           if (!index || index > topics.length) {
-            await interaction.reply({ content: `削除する番号を1〜${topics.length}から選んでください。`, flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: `削除する番号を1〜${topics.length}から選んでください。` });
             return;
           }
           topics.splice(index - 1, 1);
           if (topics.length === 0) guildSettings.community.topicIndex = 0;
           else guildSettings.community.topicIndex %= topics.length;
           saveGuildSettings();
-          await interaction.reply({ content: `話題 ${index} を削除しました。${topics.length ? `登録中: ${topics.length}件` : "登録話題がなくなったため、Bot内蔵の話題に戻ります。"}`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `話題 ${index} を削除しました。${topics.length ? `登録中: ${topics.length}件` : "登録話題がなくなったため、Bot内蔵の話題に戻ります。"}` });
           return;
         }
         if (topics.length === 0) {
-          await interaction.reply({ content: "独自の話題は未登録です。Bot内蔵の話題を投稿しています。`action:add` で追加できます。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "独自の話題は未登録です。Bot内蔵の話題を投稿しています。`action:add` で追加できます。" });
           return;
         }
         const chunks = [];
@@ -1250,32 +1246,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
           chunk += `${chunk ? "\n" : ""}${line}`;
         }
         if (chunk) chunks.push(chunk);
-        await interaction.reply({ content: chunks[0], flags: MessageFlags.Ephemeral });
-        for (const followup of chunks.slice(1)) await interaction.followUp({ content: followup, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: chunks[0] });
+        for (const followup of chunks.slice(1)) await interaction.followUp({ content: followup });
         return;
       }
       if (subcommand === "topics-clear") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "週次話題の設定を解除できるのはサーバー管理者または設定された使用ロールのメンバーです。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "週次話題の設定を解除できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
           return;
         }
         guildSettings.community.topicChannelId = null;
         guildSettings.community.topicLastPostedDate = null;
         saveGuildSettings();
         await interaction.reply({
-          content: "週次話題の自動投稿を停止しました。登録済みの独自話題は保存されています。再開するには `/community topics` を設定してください。",
-          flags: MessageFlags.Ephemeral,
-        });
+          content: "週次話題の自動投稿を停止しました。登録済みの独自話題は保存されています。再開するには `/community topics` を設定してください。",        });
         return;
       }
       if (subcommand === "topics") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "話題設定はサーバー管理者または設定された使用ロールのメンバーが実行できます。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "話題設定はサーバー管理者または設定された使用ロールのメンバーが実行できます。" });
           return;
         }
         const channel = interaction.options.getChannel("channel", true);
         if (!channel.isTextBased() || channel.guildId !== config.guildId) {
-          await interaction.reply({ content: "話題の投稿先にはサーバー内のテキストチャンネルを指定してください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "話題の投稿先にはサーバー内のテキストチャンネルを指定してください。" });
           return;
         }
         guildSettings.community.topicChannelId = channel.id;
@@ -1284,14 +1278,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         saveGuildSettings();
         const weekday = ["日", "月", "火", "水", "木", "金", "土"][guildSettings.community.topicDay];
         await interaction.reply({
-          content: `毎週${weekday}曜日 ${guildSettings.community.topicHour}:00（日本時間）に、${channel} へ話題を投稿します。`,
-          flags: MessageFlags.Ephemeral,
-        });
+          content: `毎週${weekday}曜日 ${guildSettings.community.topicHour}:00（日本時間）に、${channel} へ話題を投稿します。`,        });
         return;
       }
       if (subcommand === "panel") {
         if (!interaction.channel?.isTextBased()) {
-          await interaction.reply({ content: "募集ボタンはテキストチャンネルで設置してください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "募集ボタンはテキストチャンネルで設置してください。" });
           return;
         }
         const existingMessageId = guildSettings.community.recruitmentPanels[interaction.channelId];
@@ -1305,7 +1297,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           guildSettings.community.recruitmentPanels[interaction.channelId] = panelMessage.id;
           saveGuildSettings();
         }
-        await interaction.reply({ content: `${updated ? "募集ボタンを更新しました" : "募集作成ボタンを設置しました"}: ${interaction.channel}`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `${updated ? "募集ボタンを更新しました" : "募集作成ボタンを設置しました"}: ${interaction.channel}` });
         return;
       }
     }
@@ -1342,7 +1334,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const sourceChannel = interaction.channel;
       if (!sourceChannel || ![ChannelType.GuildText, ChannelType.GuildVoice].includes(sourceChannel.type)) {
-        await interaction.reply({ content: "`/join` は聞き専チャンネル、または読み上げたいVC内チャットで実行してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "`/join` は聞き専チャンネル、または読み上げたいVC内チャットで実行してください。" });
         return;
       }
       const sourceChannelId = sourceChannel.id;
@@ -1350,15 +1342,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (connectedChannelId === channel.id && connection?.state.status === VoiceConnectionStatus.Ready) {
         activeListeningChannelId = sourceChannelId === channel.id ? null : sourceChannelId;
         const readSources = activeListeningChannelId ? `VC内チャットと <#${activeListeningChannelId}>` : "接続中VCのチャット";
-        await interaction.reply({ content: `すでに ${channel.name} に接続しています。読み上げ対象: ${readSources}。`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `すでに ${channel.name} に接続しています。読み上げ対象: ${readSources}。` });
         return;
       }
       if (connectedChannelId && connectedChannelId !== channel.id
         && !(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-        await interaction.reply({ content: "Botは別のボイスチャンネルで使用中です。接続先を変更できるのはサーバー管理権限を持つメンバーです。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Botは別のボイスチャンネルで使用中です。接続先を変更できるのはサーバー管理権限を持つメンバーです。" });
         return;
       }
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
       await connectTo(channel, sourceChannelId);
       enqueueText({ text: "接続しました。", authorId: interaction.user.id });
       const readSources = activeListeningChannelId ? `VC内チャットと <#${activeListeningChannelId}>` : "接続中VCのチャット";
@@ -1369,7 +1361,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "leave") {
       if ((connection || queue.size > 0) && !isInConnectedVoiceChannel(interaction)
         && !(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/leave` を使えます。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/leave` を使えます。" });
         return;
       }
       queue.clear();
@@ -1379,7 +1371,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       connection = null;
       activeListeningChannelId = null;
-      await interaction.reply({ content: "読み上げを停止して切断しました。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "読み上げを停止して切断しました。" });
       return;
     }
 
@@ -1387,7 +1379,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const metricText = lastMetric
         ? `\n直近: 待ち ${lastMetric.queueWaitMs} ms / 合成 ${lastMetric.synthesisMs} ms / 受信から再生開始 ${lastMetric.playbackStartMs ?? "計測中"} ms`
         : "\nまだ再生計測はありません。";
-      await interaction.reply({ content: `待ち件数: ${queue.size}${metricText}`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `待ち件数: ${queue.size}${metricText}` });
       return;
     }
 
@@ -1417,70 +1409,66 @@ client.on(Events.InteractionCreate, async (interaction) => {
         formatEndpointStatus("GPT-SoVITS API", gptSovitsStatus),
         `GPT-SoVITS一時キャッシュ: ${cache.entries}/${cache.maxEntries}件、${cacheMiB}/${(cache.maxBytes / (1024 * 1024)).toFixed(0)} MiB（メモリ内）`,
       ].join("\n");
-      await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content });
       return;
     }
 
     if (interaction.commandName === "skip") {
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/skip` を使えます。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/skip` を使えます。" });
         return;
       }
       const skipped = queue.skip();
-      await interaction.reply({ content: skipped ? "再生をスキップしました。" : "再生中の文章はありません。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: skipped ? "再生をスキップしました。" : "再生中の文章はありません。" });
       return;
     }
 
     if (interaction.commandName === "say") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
         return;
       }
       const result = enqueueText({ text: interaction.options.getString("text", true), authorId: interaction.user.id });
       const message = result.accepted ? `読み上げ列に追加しました（${result.position}番目）。` : result.reason === "empty" ? "リンクなどを省略した結果、読み上げる内容がありません。" : "読み上げ列がいっぱいです。少し待ってから試してください。";
-      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: message });
       return;
     }
 
     if (interaction.commandName === "cumulo") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
         return;
       }
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。" });
         return;
       }
       if (!voiceClips.cumulo?.length) {
-        await interaction.reply({ content: "キュムロニンバス音声が登録されていません。管理者に設定を確認してもらってください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "キュムロニンバス音声が登録されていません。管理者に設定を確認してもらってください。" });
         return;
       }
       const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.cumulo, volume: 0.1 }], authorId: interaction.user.id });
       await interaction.reply({
-        content: result.accepted ? `キュムロニンバス音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",
-        flags: MessageFlags.Ephemeral,
-      });
+        content: result.accepted ? `キュムロニンバス音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",      });
       return;
     }
 
     if (interaction.commandName === "ubw") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
         return;
       }
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。" });
         return;
       }
       if (!voiceClips.ubw?.length) {
-        await interaction.reply({ content: "UBW音声が登録されていません。管理者に設定を確認してもらってください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "UBW音声が登録されていません。管理者に設定を確認してもらってください。" });
         return;
       }
       const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.ubw, volume: 0.1 }], authorId: interaction.user.id });
       await interaction.reply({
-        content: result.accepted ? `UBW音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",
-        flags: MessageFlags.Ephemeral,
-      });
+        content: result.accepted ? `UBW音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",      });
       return;
     }
 
@@ -1491,16 +1479,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({
         content: enabled
           ? "あなたの投稿をスピキモード（" + (config.supikiTtsProvider === "gpt-sovits" ? "GPT-SoVITS参照音声" : "VOICEVOX調整音声") + "）で読み上げます。通常に戻すには `/supiki enabled:false` を実行してください。"
-          : "あなたの投稿を通常モードで読み上げます。",
-        flags: MessageFlags.Ephemeral,
-      });
+          : "あなたの投稿を通常モードで読み上げます。",      });
       return;
     }
 
     if (interaction.commandName === "supiki-language") {
       const language = interaction.options.getString("language", true);
       if (!["auto", "ja", "ko"].includes(language)) {
-        await interaction.reply({ content: "言語は auto、ja、ko から選択してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "言語は auto、ja、ko から選択してください。" });
         return;
       }
       supikiUsers.add(interaction.user.id);
@@ -1509,9 +1495,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       saveGuildSettings();
       const languageLabel = { auto: "自動判定", ja: "日本語", ko: "韓国語" }[language];
       await interaction.reply({
-        content: `GPT-SoVITSの読み上げ言語を${languageLabel}に設定し、スピキモードをONにしました。通常のVOICEVOXへ戻すには /supiki enabled:false を実行してください。`,
-        flags: MessageFlags.Ephemeral,
-      });
+        content: `GPT-SoVITSの読み上げ言語を${languageLabel}に設定し、スピキモードをONにしました。通常のVOICEVOXへ戻すには /supiki enabled:false を実行してください。`,      });
       return;
     }
 
@@ -1520,12 +1504,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const speakerValue = interaction.options.getString("speaker");
       const selectedSpeakerId = speakerValue === null ? null : Number(speakerValue);
       if (speakerValue !== null && (!Number.isInteger(selectedSpeakerId) || selectedSpeakerId < 0)) {
-        await interaction.reply({ content: "話者候補から名前を選んでください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "話者候補から名前を選んでください。" });
         return;
       }
       if (interaction.commandName === "speaker") {
         if (selectedSpeakerId === null) {
-          await interaction.reply({ content: "話者名を候補から選んでください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "話者名を候補から選んでください。" });
           return;
         }
         preference.speakerId = selectedSpeakerId;
@@ -1533,7 +1517,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const speedScale = interaction.options.getNumber("speed");
         const pitchScale = interaction.options.getNumber("pitch");
         if (selectedSpeakerId === null && speedScale === null && pitchScale === null) {
-          await interaction.reply({ content: "speaker、speed、pitchのいずれかを指定してください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "speaker、speed、pitchのいずれかを指定してください。" });
           return;
         }
         if (selectedSpeakerId !== null) preference.speakerId = selectedSpeakerId;
@@ -1544,7 +1528,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const speakerLabel = preference.speakerId ?? config.defaultSpeakerId;
       const speedLabel = preference.speedScale ?? 1;
       const pitchLabel = preference.pitchScale ?? 0;
-      await interaction.reply({ content: `設定しました（話者ID ${speakerLabel}、速度 ${speedLabel}、高さ ${pitchLabel}）。`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `設定しました（話者ID ${speakerLabel}、速度 ${speedLabel}、高さ ${pitchLabel}）。` });
       return;
     }
 
@@ -1552,9 +1536,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const preference = voicePreferencesByUser.get(interaction.user.id) ?? {};
       const speakerLabel = await getSpeakerLabel(preference.speakerId ?? config.defaultSpeakerId);
       await interaction.reply({
-        content: `話者: ${speakerLabel}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}\nGPT-SoVITS言語: ${{ auto: "自動", ja: "日本語", ko: "韓国語" }[gptSovitsLanguageByUser.get(interaction.user.id) ?? config.gptSovitsTextLanguage]}`,
-        flags: MessageFlags.Ephemeral,
-      });
+        content: `話者: ${speakerLabel}\n速度: ${preference.speedScale ?? 1}\n高さ: ${preference.pitchScale ?? 0}\nスピキ風モード: ${supikiUsers.has(interaction.user.id) ? "ON" : "OFF"}\nGPT-SoVITS言語: ${{ auto: "自動", ja: "日本語", ko: "韓国語" }[gptSovitsLanguageByUser.get(interaction.user.id) ?? config.gptSovitsTextLanguage]}`,      });
       return;
     }
 
@@ -1564,14 +1546,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const pageCount = Math.max(1, Math.ceil(styles.length / pageSize));
       const page = interaction.options.getInteger("page") ?? 1;
       if (page > pageCount) {
-        await interaction.reply({ content: `ページは1〜${pageCount}で指定してください。`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `ページは1〜${pageCount}で指定してください。` });
         return;
       }
       const lines = styles.slice((page - 1) * pageSize, page * pageSize).map((style) => `• ${style.label}`);
       await interaction.reply({
-        content: `**VOICEVOX話者一覧 ${page}/${pageCount}**\n${lines.join("\n")}\n\n変更するには /setvoice speaker で話者名を検索して選んでください。`,
-        flags: MessageFlags.Ephemeral,
-      });
+        content: `**VOICEVOX話者一覧 ${page}/${pageCount}**\n${lines.join("\n")}\n\n変更するには /setvoice speaker で話者名を検索して選んでください。`,      });
       return;
     }
 
@@ -1581,7 +1561,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const content = guildSettings.dictionary.length
           ? guildSettings.dictionary.map((entry) => `「${entry.word}」→「${entry.reading}」`).join("\n")
           : "辞書は空です。";
-        await interaction.reply({ content: content.slice(0, 1900), flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: content.slice(0, 1900) });
         return;
       }
       const word = interaction.options.getString("word", true).trim();
@@ -1592,17 +1572,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (existing >= 0) guildSettings.dictionary[existing] = entry;
         else guildSettings.dictionary.push(entry);
         saveGuildSettings();
-        await interaction.reply({ content: `辞書に登録しました: 「${word}」→「${reading}」`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `辞書に登録しました: 「${word}」→「${reading}」` });
         return;
       }
       const existing = guildSettings.dictionary.findIndex((entry) => entry.word === word);
       if (existing < 0) {
-        await interaction.reply({ content: `「${word}」は辞書にありません。`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `「${word}」は辞書にありません。` });
         return;
       }
       guildSettings.dictionary.splice(existing, 1);
       saveGuildSettings();
-      await interaction.reply({ content: `「${word}」を辞書から削除しました。`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `「${word}」を辞書から削除しました。` });
       return;
     }
 
@@ -1610,13 +1590,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const announcements = interaction.options.getBoolean("announcements");
       const linkMode = interaction.options.getString("links");
       if (announcements === null && linkMode === null) {
-        await interaction.reply({ content: `入退室通知: ${guildSettings.announceVoiceEvents ? "ON" : "OFF"}\nURL読み上げ: ${guildSettings.linkSpeechMode}`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `入退室通知: ${guildSettings.announceVoiceEvents ? "ON" : "OFF"}\nURL読み上げ: ${guildSettings.linkSpeechMode}` });
         return;
       }
       if (announcements !== null) guildSettings.announceVoiceEvents = announcements;
       if (linkMode !== null) guildSettings.linkSpeechMode = linkMode;
       saveGuildSettings();
-      await interaction.reply({ content: `設定を保存しました。入退室通知: ${guildSettings.announceVoiceEvents ? "ON" : "OFF"} / URL読み上げ: ${guildSettings.linkSpeechMode}`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `設定を保存しました。入退室通知: ${guildSettings.announceVoiceEvents ? "ON" : "OFF"} / URL読み上げ: ${guildSettings.linkSpeechMode}` });
       return;
     }
 
@@ -1629,20 +1609,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const canManageCommunity = hasCommunityAccess(interaction);
 
       if (channelOption && !canManage) {
-        await interaction.reply({ content: "通知先を設定できるのはサーバー管理権限を持つメンバーです。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "通知先を設定できるのはサーバー管理権限を持つメンバーです。" });
         return;
       }
       if (channelOption && !channelOption.isTextBased()) {
-        await interaction.reply({ content: "通知先にはテキストチャンネルを指定してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "通知先にはテキストチャンネルを指定してください。" });
         return;
       }
       if (scheduleText !== null) {
         if (!canManageCommunity) {
-          await interaction.reply({ content: "月間予定を更新できるのはサーバー管理者または設定された使用ロールのメンバーです。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "月間予定を更新できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
           return;
         }
         if (yearOption === null || monthOption === null) {
-          await interaction.reply({ content: "予定を登録するときは year と month を両方指定してください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "予定を登録するときは year と month を両方指定してください。" });
           return;
         }
         const channel = channelOption
@@ -1650,14 +1630,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
           await interaction.reply({ content: canManage
             ? "通知先にできるサーバー内のテキストチャンネルを選んでください。"
-            : "ステージ通知先が未設定です。先に管理者が /season channel で通知先を設定してください。", flags: MessageFlags.Ephemeral });
+            : "ステージ通知先が未設定です。先に管理者が /season channel で通知先を設定してください。" });
           return;
         }
         let importedEntries;
         try {
           importedEntries = parseSeasonSchedule(scheduleText, yearOption, monthOption);
         } catch (error) {
-          await interaction.reply({ content: `予定を登録できませんでした: ${error.message}`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `予定を登録できませんでした: ${error.message}` });
           return;
         }
         const monthPrefix = `${yearOption}-${String(monthOption).padStart(2, "0")}-`;
@@ -1668,9 +1648,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         guildSettings.seasonChannelId = channel.id;
         saveGuildSettings();
         await interaction.reply({
-          content: `${yearOption}年${monthOption}月の予定を${importedEntries.length}日分登録しました。毎日の通知先: <#${channel.id}>`,
-          flags: MessageFlags.Ephemeral,
-        });
+          content: `${yearOption}年${monthOption}月の予定を${importedEntries.length}日分登録しました。毎日の通知先: <#${channel.id}>`,        });
         void announceTodaysSeason();
         return;
       }
@@ -1678,11 +1656,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (channelOption) {
         guildSettings.seasonChannelId = channelOption.id;
         saveGuildSettings();
-        await interaction.reply({ content: `毎日のステージ通知先を <#${channelOption.id}> に設定しました。`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `毎日のステージ通知先を <#${channelOption.id}> に設定しました。` });
         return;
       }
       if ((yearOption === null) !== (monthOption === null)) {
-        await interaction.reply({ content: "月間表示では year と month を両方指定するか、両方省略してください。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "月間表示では year と month を両方指定するか、両方省略してください。" });
         return;
       }
       const currentDate = getJstDateParts();
@@ -1691,7 +1669,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
       const entries = guildSettings.seasonEntries.filter((entry) => entry.date.startsWith(monthPrefix));
       if (!entries.length) {
-        await interaction.reply({ content: `${year}年${month}月の予定はまだ登録されていません。`, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: `${year}年${month}月の予定はまだ登録されていません。` });
         return;
       }
       const chunks = [];
@@ -1718,12 +1696,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const day = interaction.options.getInteger("day", true);
         const maxDay = new Date(Date.UTC(2024, month, 0)).getUTCDate();
         if (day > maxDay) {
-          await interaction.reply({ content: `${month}月は${maxDay}日までです。`, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: `${month}月は${maxDay}日までです。` });
           return;
         }
         const channel = interaction.options.getChannel("channel") ?? interaction.channel;
         if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-          await interaction.reply({ content: "投稿先にできるサーバー内のテキストチャンネルを選んでください。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "投稿先にできるサーバー内のテキストチャンネルを選んでください。" });
           return;
         }
         const previous = existingIndex >= 0 ? guildSettings.birthdays[existingIndex] : null;
@@ -1738,33 +1716,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
         else guildSettings.birthdays.push(birthday);
         saveGuildSettings();
         await interaction.reply({
-          content: `${month}月${day}日を誕生日として登録しました。お祝いは <#${channel.id}> に日本時間の日付が変わった後に投稿します。`,
-          flags: MessageFlags.Ephemeral,
-        });
+          content: `${month}月${day}日を誕生日として登録しました。お祝いは <#${channel.id}> に日本時間の日付が変わった後に投稿します。`,        });
         return;
       }
       if (subcommand === "remove") {
         if (existingIndex < 0) {
-          await interaction.reply({ content: "誕生日は登録されていません。", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "誕生日は登録されていません。" });
           return;
         }
         guildSettings.birthdays.splice(existingIndex, 1);
         saveGuildSettings();
-        await interaction.reply({ content: "誕生日の登録を削除しました。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "誕生日の登録を削除しました。" });
         return;
       }
       const entries = [...guildSettings.birthdays].sort((a, b) => a.month - b.month || a.day - b.day);
       const lines = entries.map((entry) => `• ${entry.month}月${entry.day}日 — <@${entry.userId}>（<#${entry.channelId}>）`);
       await interaction.reply({
-        content: lines.length ? `**登録済みの誕生日**\n${lines.join("\n")}`.slice(0, 1900) : "誕生日はまだ登録されていません。",
-        flags: MessageFlags.Ephemeral,
-      });
+        content: lines.length ? `**登録済みの誕生日**\n${lines.join("\n")}`.slice(0, 1900) : "誕生日はまだ登録されていません。",      });
     }
   } catch (error) {
     console.error("コマンド処理エラー:", error);
     const content = "処理に失敗しました。BotログとVOICEVOX Engineの状態を確認してください。";
-    if (interaction.deferred || interaction.replied) await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
-    else await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    if (interaction.deferred || interaction.replied) await interaction.followUp({ content });
+    else await interaction.reply({ content });
   }
 });
 
