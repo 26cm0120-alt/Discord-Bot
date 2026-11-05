@@ -1,0 +1,15 @@
+[
+  {
+    "keywords": ["UBW", "無限の剣製", "ユービーダブリュー"],
+    "soundKey": "ubw",
+    "volume": 0.1,
+    "cooldownMs": 12000
+  },
+  {
+    "keywords": ["キュムロニンバス", "キュムロ"],
+    "soundKey": "cumulo",
+    "volume": 0.1,
+    "cooldownMs": 12000
+  }
+]
+

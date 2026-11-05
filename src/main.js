@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomInt } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
+import OpusScript from "opusscript";
 import {
   ChannelType,
   Client,
@@ -27,6 +28,7 @@ import {
 import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
 import { GptSovitsClient } from "./gpt-sovits.js";
+import { VoiceSttWorker } from "./voice-stt.js";
 import { splitTextByLanguage } from "./language-segments.js";
 import { formatEndpointStatus, probeEndpoint } from "./engine-health.js";
 
@@ -59,6 +61,13 @@ const config = {
   maxQueueItems: Number(process.env.MAX_QUEUE_ITEMS ?? 30),
   ttsPlaybackVolume: Number.parseFloat(process.env.TTS_PLAYBACK_VOLUME ?? "0.65"),
   voiceReadyTimeoutMs: Number(process.env.VOICE_READY_TIMEOUT_MS ?? 15000),
+  voiceSttEnabled: process.env.VOICE_STT_ENABLED === "true",
+  voiceSttPythonPath: process.env.VOICE_STT_PYTHON_PATH || "python",
+  voiceSttModel: process.env.VOICE_STT_MODEL ?? "base",
+  voiceSttDevice: process.env.VOICE_STT_DEVICE ?? "cpu",
+  voiceSttComputeType: process.env.VOICE_STT_COMPUTE_TYPE ?? "int8",
+  voiceTriggerGlobalCooldownMs: Number(process.env.VOICE_TRIGGER_GLOBAL_COOLDOWN_MS ?? 3000),
+  voiceTriggerMinAvgLogProb: Number(process.env.VOICE_TRIGGER_MIN_AVG_LOG_PROB ?? -1.5),
 };
 function loadGptSovitsReferenceSet(language) {
   const suffix = language.toUpperCase();
@@ -202,6 +211,26 @@ try {
 } catch (error) {
   console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
 }
+const voiceTriggerConfigPath = resolve(process.cwd(), "assets", "voice-triggers.json");
+let voiceTriggerMappings = [];
+try {
+  const configuredMappings = JSON.parse(readFileSync(voiceTriggerConfigPath, "utf8"));
+  if (Array.isArray(configuredMappings)) {
+    voiceTriggerMappings = configuredMappings.flatMap((mapping) => {
+      if (!Array.isArray(mapping.keywords) || !mapping.keywords.some((keyword) => typeof keyword === "string" && keyword.trim())
+        || typeof mapping.soundKey !== "string" || !Buffer.isBuffer(voiceClips[mapping.soundKey])
+        || !voiceClips[mapping.soundKey].length) return [];
+      return [{
+        keywords: mapping.keywords.filter((keyword) => typeof keyword === "string" && keyword.trim()),
+        soundKey: mapping.soundKey,
+        volume: Number.isFinite(mapping.volume) ? Math.min(1, Math.max(0, mapping.volume)) : 0.1,
+        cooldownMs: Number.isFinite(mapping.cooldownMs) ? Math.max(1000, mapping.cooldownMs) : 12000,
+      }];
+    });
+  }
+} catch (error) {
+  console.warn("音声キーワード設定を読み込めません:", error.message);
+}
 const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
 const gptSovitsLanguageByUser = new Map(
@@ -213,6 +242,8 @@ let lastMetric = null;
 const IDLE_SPEECH_THRESHOLD_MS = 30 * 60 * 1000;
 const lastVoiceActivityByUser = new Map();
 const idleNoticeSentForUser = new Set();
+const lastVoiceTriggerAtBySound = new Map();
+let lastVoiceTriggerAt = 0;
 const intentionalDisconnects = new WeakSet();
 const queue = new SpeechQueue({
   player,
@@ -225,6 +256,20 @@ const queue = new SpeechQueue({
   },
   onError: (error) => console.error("読み上げエラー:", error.message),
 });
+const voiceSttWorker = config.voiceSttEnabled
+  ? new VoiceSttWorker({
+    pythonPath: config.voiceSttPythonPath,
+    scriptPath: resolve(process.cwd(), "tools", "voice_stt_worker.py"),
+    model: config.voiceSttModel,
+    device: config.voiceSttDevice,
+    computeType: config.voiceSttComputeType,
+  })
+  : null;
+voiceSttWorker?.on("ready", ({ model, device }) => console.log(`VC音声認識を開始しました（${model} / ${device}）。`));
+voiceSttWorker?.on("workerLog", (message) => console.info(`[voice-stt] ${message}`));
+voiceSttWorker?.on("workerError", (error) => console.error("VC音声認識エラー:", error.message));
+voiceSttWorker?.start();
+process.once("exit", () => voiceSttWorker?.stop());
 let speakerStylesCache = [];
 let speakerStylesCacheAt = 0;
 
@@ -391,6 +436,64 @@ function isVoiceActivityEligible(voiceState) {
   );
 }
 
+function normalizeVoiceTriggerText(text) {
+  return text.normalize("NFKC").toLocaleLowerCase("ja-JP").replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+function makeMonoWav(pcm) {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16000, 24);
+  header.writeUInt32LE(32000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+function downsampleOpusPcmTo16kMono(pcm) {
+  const inputFrames = Math.floor(pcm.length / 4);
+  const outputFrames = Math.floor(inputFrames / 3);
+  const output = Buffer.alloc(outputFrames * 2);
+  for (let outputIndex = 0; outputIndex < outputFrames; outputIndex += 1) {
+    let sum = 0;
+    for (let frameIndex = outputIndex * 3; frameIndex < outputIndex * 3 + 3; frameIndex += 1) {
+      const offset = frameIndex * 4;
+      sum += pcm.readInt16LE(offset) + pcm.readInt16LE(offset + 2);
+    }
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sum / 6))), outputIndex * 2);
+  }
+  return output;
+}
+
+function handleVoiceTranscript(result) {
+  if (!result?.text || result.avgLogProb < config.voiceTriggerMinAvgLogProb || result.noSpeechProb > 0.6) return;
+  const normalizedText = normalizeVoiceTriggerText(result.text);
+  if (!normalizedText) return;
+  const mapping = voiceTriggerMappings.find((entry) => entry.keywords.some((keyword) => normalizedText.includes(normalizeVoiceTriggerText(keyword))));
+  if (!mapping) return;
+  const now = Date.now();
+  const lastBySound = lastVoiceTriggerAtBySound.get(mapping.soundKey) ?? 0;
+  if (now - lastVoiceTriggerAt < config.voiceTriggerGlobalCooldownMs || now - lastBySound < mapping.cooldownMs) return;
+  const buffer = voiceClips[mapping.soundKey];
+  if (!buffer?.length) return;
+  const queued = enqueueSegments({
+    segments: [{ type: "audio", buffer, volume: mapping.volume }],
+    authorId: result.userId,
+  });
+  if (!queued.accepted) return;
+  lastVoiceTriggerAt = now;
+  lastVoiceTriggerAtBySound.set(mapping.soundKey, now);
+  console.info(JSON.stringify({ event: "voice_keyword_sound_queued", userId: result.userId, soundKey: mapping.soundKey }));
+}
+
 function resetVoiceActivityTracking(channel, activeConnection) {
   lastVoiceActivityByUser.clear();
   idleNoticeSentForUser.clear();
@@ -411,17 +514,56 @@ function resetVoiceActivityTracking(channel, activeConnection) {
     const cleanupStream = () => {
       if (receiveStreams.get(userId) === stream) receiveStreams.delete(userId);
     };
+    const decoder = voiceSttWorker ? new OpusScript(48000, 2, OpusScript.Application.AUDIO) : null;
+    let decoderClosed = false;
+    const closeDecoder = () => {
+      if (!decoder || decoderClosed) return;
+      decoderClosed = true;
+      decoder.delete();
+    };
+    const pcmChunks = [];
+    let pcmBytes = 0;
+    const maxPcmBytes = 16000 * 2 * 30;
+    if (decoder) {
+      stream.once("end", () => {
+        closeDecoder();
+        if (pcmBytes < 3200 || !voiceSttWorker) return;
+        const pcm = Buffer.concat(pcmChunks, pcmBytes);
+        const hotwords = voiceTriggerMappings.flatMap((entry) => entry.keywords).join("、").slice(0, 100);
+        const transcription = voiceSttWorker.transcribe(userId, makeMonoWav(pcm), hotwords);
+        transcription?.then(handleVoiceTranscript);
+      });
+    }
     stream.on("data", () => {
       if (connection !== activeConnection) return;
       lastVoiceActivityByUser.set(userId, Date.now());
       idleNoticeSentForUser.delete(userId);
     });
+    if (decoder) {
+      stream.on("data", (packet) => {
+        if (connection !== activeConnection) return;
+        try {
+          const decoded = decoder.decode(packet, 960);
+          const converted = downsampleOpusPcmTo16kMono(decoded);
+          if (!converted.length) return;
+          pcmChunks.push(converted);
+          pcmBytes += converted.length;
+          while (pcmBytes > maxPcmBytes && pcmChunks.length > 1) pcmBytes -= pcmChunks.shift().length;
+        } catch (error) {
+          console.warn("音声パケットをデコードできません:", error.message);
+        }
+      });
+    }
     stream.once("error", (error) => {
       cleanupStream();
+      closeDecoder();
       console.warn(JSON.stringify({ event: "voice_activity_receive_error", userId, message: error.message }));
     });
     stream.once("end", cleanupStream);
-    stream.once("close", cleanupStream);
+    stream.once("close", () => {
+      cleanupStream();
+      closeDecoder();
+    });
   });
 }
 
@@ -1516,6 +1658,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `待ち列: ${queue.size}件`,
         formatEndpointStatus("VOICEVOX Engine", voicevoxStatus),
         formatEndpointStatus("GPT-SoVITS API", gptSovitsStatus),
+        `VCキーワード音声: ${!config.voiceSttEnabled ? "OFF" : voiceSttWorker?.ready ? "稼働中" : "起動中または利用不可"}`,
         `GPT-SoVITS一時キャッシュ: ${cache.entries}/${cache.maxEntries}件、${cacheMiB}/${(cache.maxBytes / (1024 * 1024)).toFixed(0)} MiB（メモリ内）`,
       ].join("\n");
       await interaction.reply({ content });

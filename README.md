@@ -18,6 +18,7 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 - `/tournament create title:<イベント名>` で3対3トーナメントの参加受付を投稿。締切後は抽選でチームとトーナメント表を作り、主催者がボタンで勝者を登録します。
 - `/ubw` と `/cumulo` で運営者がローカル登録した音声を再生（各音量10%）。音声素材は公開リポジトリに含めません。
 - 接続中VCで30分間発話が検出されないメンバーを「無発話の可能性」として `/join` を実行したチャンネルへ通知します。離席の断定には使いません。音声は保存せず、発話時刻だけをメモリ上で管理します。
+- オプトインでVC参加者の発話をローカル faster-whisper で文字起こしし、登録キーワードに反応して効果音を再生します。認識本文・音声は保存しません。
 - スラッシュコマンドとボタン操作へのBot応答はチャンネルに表示され、ほかのメンバーも閲覧できます。
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
 - `/status` で音声接続、読み上げモード、待ち列、VOICEVOX/GPT-SoVITS APIの応答と一時キャッシュ量を確認
@@ -55,6 +56,14 @@ VOICEVOX Windows版を使います。まずはCPU版で起動を確認し、必�
 7. DiscordでBotが対象サーバーに参加していることを確認し、読み上げたいボイスチャンネルに入って `/join` を実行します。
 
 Developer PortalでMessage Content Intentを有効にしてください。聞き専用チャンネルで `/join` を実行すると、そのチャンネルとBotが接続したVC内チャットだけを読み上げます。VC内チャットで `/join` を実行した場合は、そのVC内チャットだけが対象です。他の聞き専用チャンネルは読み上げません。VC内にBot以外のユーザーがいなくなるとBotは自動で切断します。PCがスリープまたは電源オフになるとBotも停止します。
+
+### 発話キーワードで効果音を流す
+
+この機能は初期状態では無効です。ローカルの faster-whisper が入っているPythonを `.env` の `VOICE_STT_PYTHON_PATH` に指定し、`VOICE_STT_ENABLED=true` にします。GPT-SoVITS Windows版のruntimeに faster-whisper がある場合は、その `runtime/python.exe` を指定できます。`VOICE_STT_MODEL=base`、`VOICE_STT_DEVICE=cpu`、`VOICE_STT_COMPUTE_TYPE=int8` が初期値です。初回起動時にモデルが未取得ならダウンロードされます。
+
+`assets/voice-triggers.json` にキーワード、音源キー、音量、クールダウンを設定します。初期設定は「UBW / 無限の剣製 → ubw」「キュムロニンバス → cumulo」です。音声本体は既存の `assets/voice-clips.local.json` から読み、GitHubには含めません。BotがVC接続中に人の発話を認識すると、該当する効果音を読み上げ列へ追加します。`/status` で音声認識の稼働状態を確認できます。
+
+音声はVCから一時的に受信してPC上で認識します。音声と文字起こしはファイルやログに保存しません。参加者へ機能を案内してから有効にしてください。
 
 ## GPT-SoVITSの参照音声モード（Windows）
 
