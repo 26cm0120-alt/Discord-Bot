@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomInt } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
 import {
@@ -96,6 +97,7 @@ const defaultSettings = {
     customTopics: [],
     recruitmentPanels: {},
     recruitments: {},
+    tournaments: {},
   },
 };
 let savedSettings = {};
@@ -126,6 +128,9 @@ const guildSettings = {
       : {},
     recruitments: savedSettings.community?.recruitments && typeof savedSettings.community.recruitments === "object" && !Array.isArray(savedSettings.community.recruitments)
       ? savedSettings.community.recruitments
+      : {},
+    tournaments: savedSettings.community?.tournaments && typeof savedSettings.community.tournaments === "object" && !Array.isArray(savedSettings.community.tournaments)
+      ? savedSettings.community.tournaments
       : {},
   },
 };
@@ -170,7 +175,7 @@ const gptSovitsTts = new GptSovitsClient({
 const player = createAudioPlayer();
 const voiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.json");
 const localVoiceClipsPath = resolve(process.cwd(), "assets", "voice-clips.local.json");
-let voiceClips = { join: null, leave: null, like: null, stop: null, phrase: [], clean: null, dislike: null, hide: null, pumpkin: null };
+let voiceClips = { join: null, leave: null, like: null, stop: null, phrase: [], clean: null, dislike: null, hide: null, pumpkin: null, ubw: null, cumulo: null };
 try {
   const encodedClips = JSON.parse(readFileSync(voiceClipsPath, "utf8"));
   if (existsSync(localVoiceClipsPath)) {
@@ -192,6 +197,8 @@ try {
     dislike: Buffer.from(encodedClips.morijabadangizibazeyo ?? "", "base64"),
     hide: Buffer.from(encodedClips.sunbakochi ?? "", "base64"),
     pumpkin: Buffer.from(encodedClips.squash ?? "", "base64"),
+    ubw: Buffer.from(encodedClips.ubw ?? "", "base64"),
+    cumulo: Buffer.from(encodedClips.cumulo ?? "", "base64"),
   };
 } catch (error) {
   console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
@@ -631,6 +638,174 @@ function recruitmentMessagePayload(recruitment) {
   return { embeds: [embed], components: [row], allowedMentions: { parse: [] } };
 }
 
+const MAX_TOURNAMENT_PLAYERS = 48;
+function shuffleArray(values) {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function makeTournamentMatch(roundNumber, matchNumber, teamAId, teamBId = null) {
+  return {
+    id: `r${roundNumber}m${matchNumber}`,
+    teamAId,
+    teamBId,
+    winnerTeamId: teamBId ? null : teamAId,
+    bye: !teamBId,
+  };
+}
+
+function drawTournament(tournament) {
+  const shuffledPlayers = shuffleArray(tournament.participantIds);
+  const playingCount = Math.floor(shuffledPlayers.length / 3) * 3;
+  const playingPlayers = shuffledPlayers.slice(0, playingCount);
+  tournament.reserveIds = shuffledPlayers.slice(playingCount);
+  tournament.teams = [];
+  for (let index = 0; index < playingPlayers.length; index += 3) {
+    const teamIndex = index / 3;
+    const teamId = String.fromCharCode(65 + teamIndex);
+    tournament.teams.push({
+      id: teamId,
+      name: `${teamId}チーム`,
+      memberIds: playingPlayers.slice(index, index + 3),
+    });
+  }
+
+  const shuffledTeams = shuffleArray(tournament.teams.map((team) => team.id));
+  const bracketSize = 2 ** Math.ceil(Math.log2(shuffledTeams.length));
+  const byeCount = bracketSize - shuffledTeams.length;
+  const byeTeamIds = shuffledTeams.slice(0, byeCount);
+  const pairedTeamIds = shuffledTeams.slice(byeCount);
+  const matches = byeTeamIds.map((teamId, index) => makeTournamentMatch(1, index + 1, teamId));
+  for (let index = 0; index < pairedTeamIds.length; index += 2) {
+    matches.push(makeTournamentMatch(1, matches.length + 1, pairedTeamIds[index], pairedTeamIds[index + 1]));
+  }
+
+  tournament.rounds = [{ name: "第1回戦", matches }];
+  tournament.currentRoundIndex = 0;
+  tournament.phase = "running";
+  tournament.hasPlayedMatch = false;
+  tournament.winnerTeamId = null;
+  tournament.drawAt = Date.now();
+}
+
+function advanceTournamentIfReady(tournament) {
+  const currentRound = tournament.rounds[tournament.currentRoundIndex];
+  if (!currentRound?.matches.every((match) => match.winnerTeamId)) return;
+  const winners = currentRound.matches.map((match) => match.winnerTeamId);
+  if (winners.length === 1) {
+    tournament.phase = "complete";
+    tournament.winnerTeamId = winners[0];
+    return;
+  }
+  const roundNumber = tournament.currentRoundIndex + 2;
+  const matches = [];
+  for (let index = 0; index < winners.length; index += 2) {
+    matches.push(makeTournamentMatch(roundNumber, matches.length + 1, winners[index], winners[index + 1]));
+  }
+  tournament.rounds.push({ name: `第${roundNumber}回戦`, matches });
+  tournament.currentRoundIndex += 1;
+}
+
+function getTournamentTeam(tournament, teamId) {
+  return tournament.teams.find((team) => team.id === teamId) ?? null;
+}
+
+function tournamentMessagePayload(tournament, messageId = tournament.messageId) {
+  const teamLines = tournament.teams.map((team) => `**${team.name}:** ${team.memberIds.map((id) => `<@${id}>`).join("、")}`);
+  if (tournament.phase === "signup") {
+    const participantLines = tournament.participantIds.length
+      ? `\n\n**参加表明:** ${tournament.participantIds.map((id) => `<@${id}>`).join("、")}`
+      : "\n\nまだ参加者はいません。";
+    const embed = new EmbedBuilder()
+      .setTitle(`3対3トーナメント参加受付: ${tournament.title}`.slice(0, 256))
+      .setDescription([
+        "参加ボタンを押してエントリーしてください。主催者が受付を締め切ると、参加者をランダムに3人ずつのチームへ分け、シングルエリミネーションのトーナメント表を作ります。",
+        `**参加者:** ${tournament.participantIds.length}/${MAX_TOURNAMENT_PLAYERS}`,
+        "参加者が3人単位にならない場合、余った人は補欠になります。試合開始前は主催者が再抽選できます。",
+        `**主催:** <@${tournament.hostId}>`,
+        participantLines,
+      ].join("\n\n").slice(0, 4000))
+      .setColor(0x5865f2)
+      .setFooter({ text: "募集作成者が「抽選して開始」を押すと受付終了です" });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`tournament:join:${messageId}`)
+        .setLabel("参加 / 取り消し")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`tournament:start:${messageId}`)
+        .setLabel("抽選して開始")
+        .setStyle(ButtonStyle.Primary),
+    );
+    return { embeds: [embed], components: [row], allowedMentions: { parse: [] } };
+  }
+
+  const roundsText = tournament.rounds.map((round, roundIndex) => {
+    const lines = round.matches.map((match, matchIndex) => {
+      const teamA = getTournamentTeam(tournament, match.teamAId);
+      const teamB = match.teamBId ? getTournamentTeam(tournament, match.teamBId) : null;
+      if (match.bye) return `${matchIndex + 1}. ${teamA?.name ?? "チーム"}（不戦勝）`;
+      if (match.winnerTeamId) {
+        const winner = getTournamentTeam(tournament, match.winnerTeamId);
+        const loser = getTournamentTeam(tournament, match.winnerTeamId === match.teamAId ? match.teamBId : match.teamAId);
+        return `${matchIndex + 1}. ${teamA?.name ?? "?"} vs ${teamB?.name ?? "?"} → **${winner?.name ?? "?"}勝利**（${loser?.name ?? "?"}）`;
+      }
+      return `${matchIndex + 1}. ${teamA?.name ?? "?"} vs ${teamB?.name ?? "?"} — 結果待ち`;
+    });
+    return `**${round.name}${roundIndex === tournament.currentRoundIndex && tournament.phase === "running" ? "（進行中）" : ""}**\n${lines.join("\n")}`;
+  });
+  const sections = ["**抽選されたチーム**", ...teamLines];
+  if (tournament.reserveIds?.length) sections.push(`**補欠:** ${tournament.reserveIds.map((id) => `<@${id}>`).join("、")}`);
+  sections.push("**トーナメント表**", ...roundsText);
+  if (tournament.phase === "complete") {
+    const winner = getTournamentTeam(tournament, tournament.winnerTeamId);
+    sections.unshift(`🏆 **優勝: ${winner?.name ?? "チーム"}**\n`);
+  }
+  const embed = new EmbedBuilder()
+    .setTitle(`3対3トーナメント: ${tournament.title}`.slice(0, 256))
+    .setDescription(sections.join("\n\n").slice(0, 4000))
+    .setColor(tournament.phase === "complete" ? 0xf1c40f : 0x57f287)
+    .setFooter({ text: tournament.phase === "complete" ? "トーナメント終了" : "勝者の登録は主催者またはサーバー管理者が行えます" });
+
+  const components = [];
+  if (tournament.phase === "running") {
+    const currentRound = tournament.rounds[tournament.currentRoundIndex];
+    const buttons = [];
+    for (const [index, match] of currentRound.matches.entries()) {
+      if (match.bye || match.winnerTeamId) continue;
+      const teamA = getTournamentTeam(tournament, match.teamAId);
+      const teamB = getTournamentTeam(tournament, match.teamBId);
+      buttons.push(new ButtonBuilder()
+        .setCustomId(`tournament:win:${messageId}:${match.id}:${match.teamAId}`)
+        .setLabel(`${index + 1}戦 ${teamA?.name ?? "A"}勝ち`)
+        .setStyle(ButtonStyle.Primary));
+      buttons.push(new ButtonBuilder()
+        .setCustomId(`tournament:win:${messageId}:${match.id}:${match.teamBId}`)
+        .setLabel(`${index + 1}戦 ${teamB?.name ?? "B"}勝ち`)
+        .setStyle(ButtonStyle.Secondary));
+    }
+    if (!tournament.hasPlayedMatch) {
+      buttons.push(new ButtonBuilder()
+        .setCustomId(`tournament:reroll:${messageId}`)
+        .setLabel("チームを再抽選")
+        .setStyle(ButtonStyle.Danger));
+    }
+    for (let index = 0; index < buttons.length; index += 5) {
+      components.push(new ActionRowBuilder().addComponents(buttons.slice(index, index + 5)));
+    }
+  }
+  return { embeds: [embed], components, allowedMentions: { parse: [] } };
+}
+
+function canManageTournament(interaction, tournament) {
+  return interaction.user.id === tournament.hostId
+    || Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
+}
+
 function getJstDateTimeParts() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
@@ -683,6 +858,17 @@ function pruneRecruitments() {
   }
   const remaining = Object.entries(recruitments).sort((a, b) => a[1].createdAt - b[1].createdAt);
   while (remaining.length > 100) delete recruitments[remaining.shift()[0]];
+}
+
+function pruneTournaments() {
+  const tournaments = guildSettings.community.tournaments;
+  const entries = Object.entries(tournaments).sort((a, b) => a[1].createdAt - b[1].createdAt);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  for (const [id, tournament] of entries) {
+    if (!Number.isFinite(tournament.createdAt) || tournament.createdAt < cutoff) delete tournaments[id];
+  }
+  const remaining = Object.entries(tournaments).sort((a, b) => a[1].createdAt - b[1].createdAt);
+  while (remaining.length > 50) delete tournaments[remaining.shift()[0]];
 }
 
 async function handleCommunityComponent(interaction) {
@@ -777,6 +963,85 @@ async function handleCommunityComponent(interaction) {
   return false;
 }
 
+async function handleTournamentComponent(interaction) {
+  if (!interaction.isButton()) return false;
+  const [scope, action, messageId, matchId, teamId] = interaction.customId.split(":");
+  if (scope !== "tournament" || !messageId) return false;
+  const tournament = guildSettings.community.tournaments[messageId];
+  if (!tournament || tournament.guildId !== config.guildId) {
+    await interaction.reply({ content: "このトーナメントは見つからないか、期限切れです。", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  if (action === "join") {
+    if (tournament.phase !== "signup") {
+      await interaction.reply({ content: "このトーナメントの参加受付は終了しています。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const index = tournament.participantIds.indexOf(interaction.user.id);
+    if (index >= 0) tournament.participantIds.splice(index, 1);
+    else if (tournament.participantIds.length >= MAX_TOURNAMENT_PLAYERS) {
+      await interaction.reply({ content: `参加上限の${MAX_TOURNAMENT_PLAYERS}人に達しています。`, flags: MessageFlags.Ephemeral });
+      return true;
+    } else tournament.participantIds.push(interaction.user.id);
+    saveGuildSettings();
+    await interaction.update(tournamentMessagePayload(tournament));
+    return true;
+  }
+
+  if (!canManageTournament(interaction, tournament)) {
+    await interaction.reply({ content: "抽選の開始や試合結果を操作できるのは主催者かサーバー管理者です。", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  if (action === "start") {
+    if (tournament.phase !== "signup") {
+      await interaction.reply({ content: "このトーナメントはすでに抽選されています。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (tournament.participantIds.length < 6) {
+      await interaction.reply({ content: "3対3の対戦には6人以上の参加が必要です。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    drawTournament(tournament);
+    saveGuildSettings();
+    await interaction.update(tournamentMessagePayload(tournament));
+    return true;
+  }
+
+  if (action === "reroll") {
+    if (tournament.phase !== "running" || tournament.hasPlayedMatch) {
+      await interaction.reply({ content: "再抽選できるのは、試合結果を登録する前だけです。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    drawTournament(tournament);
+    saveGuildSettings();
+    await interaction.update(tournamentMessagePayload(tournament));
+    return true;
+  }
+
+  if (action === "win") {
+    if (tournament.phase !== "running") {
+      await interaction.reply({ content: "現在、結果を登録できる試合はありません。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const currentRound = tournament.rounds[tournament.currentRoundIndex];
+    const match = currentRound?.matches.find((entry) => entry.id === matchId);
+    if (!match || match.winnerTeamId || ![match.teamAId, match.teamBId].includes(teamId)) {
+      await interaction.reply({ content: "この試合は終了済みか、結果ボタンが古くなっています。", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    match.winnerTeamId = teamId;
+    tournament.hasPlayedMatch = true;
+    advanceTournamentIfReady(tournament);
+    saveGuildSettings();
+    await interaction.update(tournamentMessagePayload(tournament));
+    return true;
+  }
+
+  return false;
+}
+
 client.on(Events.MessageCreate, (message) => {
   const connectedVoiceChannelId = getConnectedVoiceChannelId();
   const isConnectedVoiceChat = Boolean(connectedVoiceChannelId && message.channelId === connectedVoiceChannelId);
@@ -845,7 +1110,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.guildId === config.guildId) {
     try {
-      await handleCommunityComponent(interaction);
+      const handled = await handleCommunityComponent(interaction);
+      if (!handled) await handleTournamentComponent(interaction);
     } catch (error) {
       console.error("コミュニティ機能エラー:", error);
       const content = "処理に失敗しました。Botの権限とチャンネル設定を確認してください。";
@@ -875,6 +1141,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand() || interaction.guildId !== config.guildId) return;
 
   try {
+    if (interaction.commandName === "tournament") {
+      const subcommand = interaction.options.getSubcommand();
+      if (subcommand !== "create") return;
+      const channel = interaction.channel;
+      if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
+        await interaction.reply({ content: "サーバー内のテキストチャンネルで実行してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const title = interaction.options.getString("title", true).trim();
+      if (!title) {
+        await interaction.reply({ content: "イベント名を入力してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const tournament = {
+        guildId: config.guildId,
+        channelId: channel.id,
+        hostId: interaction.user.id,
+        title,
+        participantIds: [],
+        teams: [],
+        reserveIds: [],
+        rounds: [],
+        currentRoundIndex: 0,
+        phase: "signup",
+        hasPlayedMatch: false,
+        createdAt: Date.now(),
+      };
+      const message = await channel.send(tournamentMessagePayload({ ...tournament, messageId: "pending" }));
+      tournament.messageId = message.id;
+      await message.edit(tournamentMessagePayload(tournament));
+      guildSettings.community.tournaments[message.id] = tournament;
+      pruneTournaments();
+      saveGuildSettings();
+      await interaction.reply({ content: `3対3トーナメントの参加受付を ${channel} に投稿しました。`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (interaction.commandName === "community") {
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "access") {
@@ -1015,8 +1318,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           "`/say text:<文章>` — 文章を直接読み上げ。`/skip` — 接続中VCの参加者が再生中をスキップ。`/queue` — 待ち状況。",
           "`/status` — 音声接続、Engine/APIの応答、読み上げ設定、一時キャッシュを確認。",
           "`/setvoice speaker/speed/pitch` — 話者は名前から候補選択。`/speaker` — 話者変更。`/voice` — 自分の設定。`/voices page:<番号>` — 全話者一覧。",
+          "`/ubw` — 登録されたUBW音声を再生列に追加します（Bot接続中のVCにいるとき）。",
+          "`/cumulo` — 登録されたキュムロニンバス音声を再生列に追加します（Bot接続中のVCにいるとき）。",
           "`/supiki enabled:true/false` — 自分の投稿をスピキ風/通常に切替。",
           "`/supiki-language language:auto|ja|ko` — GPT-SoVITSの読み上げ言語を自分用に設定。",
+          "`/tournament create title:<イベント名>` — 3対3の参加受付を投稿。参加ボタンで集まり、主催者が抽選開始・試合結果を管理します。",
           "`/dict add|remove|list` — 読み方辞書。読み上げ対象は `/join` を実行した聞き専チャンネルと、Botが接続中のVCチャットです。",
           "`/birthday set month day [channel]` — 誕生日とお祝い投稿先を登録。`/birthday list` — 一覧。`/birthday remove` — 自分の登録を削除。投稿は日本時間の日付が変わった後に行われます。",
           "`/season` — 今月のローテーションを表示。`/season year month schedule` — 月間予定を登録（管理者・設定ロール）。通知先の変更は管理者のみです。",
@@ -1133,6 +1439,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const result = enqueueText({ text: interaction.options.getString("text", true), authorId: interaction.user.id });
       const message = result.accepted ? `読み上げ列に追加しました（${result.position}番目）。` : result.reason === "empty" ? "リンクなどを省略した結果、読み上げる内容がありません。" : "読み上げ列がいっぱいです。少し待ってから試してください。";
       await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.commandName === "cumulo") {
+      if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
+        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!isInConnectedVoiceChannel(interaction)) {
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!voiceClips.cumulo?.length) {
+        await interaction.reply({ content: "キュムロニンバス音声が登録されていません。管理者に設定を確認してもらってください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.cumulo, volume: 0.1 }], authorId: interaction.user.id });
+      await interaction.reply({
+        content: result.accepted ? `キュムロニンバス音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.commandName === "ubw") {
+      if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
+        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!isInConnectedVoiceChannel(interaction)) {
+        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!voiceClips.ubw?.length) {
+        await interaction.reply({ content: "UBW音声が登録されていません。管理者に設定を確認してもらってください。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.ubw, volume: 0.1 }], authorId: interaction.user.id });
+      await interaction.reply({
+        content: result.accepted ? `UBW音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
@@ -1422,4 +1770,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
+
+
 

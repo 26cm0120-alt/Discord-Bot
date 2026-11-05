@@ -9,12 +9,14 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 ## 機能
 
 - `/join` を実行した聞き専チャンネルと、Botが接続中のVC内チャットだけを読み上げる
-- `/help` `/join` `/leave` `/say` `/skip` `/queue` `/status` `/setvoice` `/voice` `/voices` `/dict` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` `/community` コマンド
+- `/help` `/join` `/leave` `/say` `/ubw` `/cumulo` `/skip` `/queue` `/status` `/setvoice` `/voice` `/voices` `/dict` `/setting` `/supiki` `/supiki-language` `/birthday` `/season` `/community` `/tournament` コマンド
 - `/skip` は接続中VCの参加者のみ使用可能。`/leave` は接続中VCの参加者またはサーバー管理者が使用でき、別VCへの `/join` 切替もサーバー管理者に限定
 - `/birthday set` で誕生日を登録し、日本時間の日付が変わると指定チャンネルへお祝いを投稿
 - `/season` で月間ステージローテーションを表示し、管理者または設定ロールが更新した予定を日本時間0時に指定チャンネルへ通知
 - `/community topics` で設定したチャンネルにゲームの話題を週1回自動投稿。`/community prompts` で独自の話題を追加・一覧・削除できます。
 - `/community panel` で募集チャンネルに募集ボタンを設置。参加者はボタンから募集を作成し、参加・取り消しを表明できます。募集の締切は主催者またはサーバー管理者が操作できます。募集記録は設定ファイルに保存し、30日経過または100件超過で古いものを削除します。
+- `/tournament create title:<イベント名>` で3対3トーナメントの参加受付を投稿。締切後は抽選でチームとトーナメント表を作り、主催者がボタンで勝者を登録します。
+- `/ubw` と `/cumulo` で運営者がローカル登録した音声を再生（各音量10%）。音声素材は公開リポジトリに含めません。
 - 読み上げ待ち列の上限と、同じ文章・話者の音声キャッシュ
 - `/status` で音声接続、読み上げモード、待ち列、VOICEVOX/GPT-SoVITS APIの応答と一時キャッシュ量を確認
 - GPT-SoVITSの合成音声を最大32件・64 MiBまでメモリ内に一時キャッシュ（Bot停止時に消去）
@@ -98,7 +100,7 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 
 `好き`、英単語の `like/likes/liked/liking` を含む箇所は `chuayo.mp3` に置換します。`やめて`、`やめてください`、`やめてくれ`、`やめなさい`、`やめてよ`、`やめろ`、英単語の `stop/stops/stopped/stopping` は登録済みの効果音に置換します。効果音の前後に残る文章はVOICEVOXで読み、同じ投稿内の順番を保ちます。
 
-追加の効果音素材は公開リポジトリへ含めず、`assets/voice-clips.local.json` に置けます。このファイルはGit管理外で、`assets/voice-clips.json` の同名キーを上書きします。既存のローカル効果音ファイルを使う場合は、そのファイルを残して運用してください。読み上げ音声は `.env` の `TTS_PLAYBACK_VOLUME`（既定値0.65）で再生し、効果音は音量30%で再生します。
+追加の効果音素材は公開リポジトリへ含めず、`assets/voice-clips.local.json` に置けます。このファイルはGit管理外で、`assets/voice-clips.json` の同名キーを上書きします。`/ubw` と `/cumulo` の音声素材もこのローカル設定に登録し、どちらも音量10%で再生します。既存のローカル効果音ファイルを使う場合は、そのファイルを残して運用してください。読み上げ音声は `.env` の `TTS_PLAYBACK_VOLUME`（既定値0.65）で再生し、通常の効果音は音量30%で再生します。
 
 `links:omit` はリンクURLを読まず、「リンク省略」と読み上げます。入室時は「○○さんが」→ `speaki.mp3` →「になりました。」、退出時は「○○さんが」→ `deruzibazeyoonly.mp3` →「しました。」の順に再生します。読み上げと効果音は一つの読み上げ列項目として扱い、途中に別の読み上げが割り込みません。
 
@@ -124,3 +126,4 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 ## 設定ファイルとトークン
 
 `.env` と `.bot-settings.json` はローカル専用です。Discord Botトークンは `.env` にだけ保存し、GitHubへコミットしないでください。`.env.example` は値の入っていない設定テンプレートです。
+

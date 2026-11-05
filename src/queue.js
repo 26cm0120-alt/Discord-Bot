@@ -71,7 +71,9 @@ export class SpeechQueue {
             }
           }
           if (!buffer?.length || item.cancelled) continue;
-          const volume = segment.type === "audio" ? 0.3 : this.ttsVolume;
+          const volume = segment.type === "audio"
+            ? Math.min(1, Math.max(0, Number.isFinite(segment.volume) ? segment.volume : 0.3))
+            : this.ttsVolume;
           const started = await this.playBuffer(buffer, item, metrics, metrics.playbackStartMs === null, volume);
           if (!started) break;
         }
@@ -125,4 +127,5 @@ export class SpeechQueue {
     });
   }
 }
+
 
