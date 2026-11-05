@@ -18,6 +18,7 @@ import {
 } from "discord.js";
 import {
   AudioPlayerStatus,
+  EndBehaviorType,
   VoiceConnectionStatus,
   createAudioPlayer,
   entersState,
@@ -209,6 +210,9 @@ const gptSovitsLanguageByUser = new Map(
 let connection = null;
 let activeListeningChannelId = null;
 let lastMetric = null;
+const IDLE_SPEECH_THRESHOLD_MS = 30 * 60 * 1000;
+const lastVoiceActivityByUser = new Map();
+const idleNoticeSentForUser = new Set();
 const intentionalDisconnects = new WeakSet();
 const queue = new SpeechQueue({
   player,
@@ -375,6 +379,83 @@ function getConnectedVoiceChannelId() {
   return connection?.joinConfig?.channelId ?? null;
 }
 
+function isVoiceActivityEligible(voiceState) {
+  return Boolean(
+    voiceState
+    && voiceState.id !== client.user?.id
+    && !voiceState.member?.user.bot
+    && !voiceState.selfMute
+    && !voiceState.serverMute
+    && !voiceState.selfDeaf
+    && !voiceState.serverDeaf,
+  );
+}
+
+function resetVoiceActivityTracking(channel, activeConnection) {
+  lastVoiceActivityByUser.clear();
+  idleNoticeSentForUser.clear();
+  const receiveStreams = new Map();
+  for (const member of channel.members.values()) {
+    if (isVoiceActivityEligible(member.voice)) lastVoiceActivityByUser.set(member.id, Date.now());
+  }
+
+  activeConnection.receiver.speaking.on("start", (userId) => {
+    if (connection !== activeConnection || userId === client.user?.id) return;
+    const member = channel.members.get(userId);
+    if (!isVoiceActivityEligible(member?.voice)) return;
+    if (receiveStreams.has(userId)) return;
+    const stream = activeConnection.receiver.subscribe(userId, {
+      end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
+    });
+    receiveStreams.set(userId, stream);
+    const cleanupStream = () => {
+      if (receiveStreams.get(userId) === stream) receiveStreams.delete(userId);
+    };
+    stream.on("data", () => {
+      if (connection !== activeConnection) return;
+      lastVoiceActivityByUser.set(userId, Date.now());
+      idleNoticeSentForUser.delete(userId);
+    });
+    stream.once("error", (error) => {
+      cleanupStream();
+      console.warn(JSON.stringify({ event: "voice_activity_receive_error", userId, message: error.message }));
+    });
+    stream.once("end", cleanupStream);
+    stream.once("close", cleanupStream);
+  });
+}
+
+async function checkVoiceInactivity() {
+  const activeConnection = connection;
+  if (!activeConnection || activeConnection.state.status !== VoiceConnectionStatus.Ready) return;
+  const voiceChannel = client.channels.cache.get(activeConnection.joinConfig.channelId);
+  if (!voiceChannel?.members) return;
+
+  const now = Date.now();
+  const newlyIdle = [];
+  for (const [userId, lastActivityAt] of lastVoiceActivityByUser) {
+    const member = voiceChannel.members.get(userId);
+    if (!isVoiceActivityEligible(member?.voice)) {
+      lastVoiceActivityByUser.delete(userId);
+      idleNoticeSentForUser.delete(userId);
+      continue;
+    }
+    if (now - lastActivityAt < IDLE_SPEECH_THRESHOLD_MS || idleNoticeSentForUser.has(userId)) continue;
+    idleNoticeSentForUser.add(userId);
+    newlyIdle.push(member.displayName);
+  }
+  if (!newlyIdle.length) return;
+
+  const noticeChannel = client.channels.cache.get(activeListeningChannelId ?? voiceChannel.id);
+  if (typeof noticeChannel?.send !== "function") {
+    console.warn(JSON.stringify({ event: "voice_inactivity_notice_unavailable", channelId: noticeChannel?.id ?? null }));
+    return;
+  }
+  const names = newlyIdle.map((name) => name.replace(/@/g, "アット")).join("、");
+  await noticeChannel.send(`🔕 ${names}さんは30分以上発話が検出されていません。離席中とは限らないため、必要なら本人に確認してください。`)
+    .catch((error) => console.warn("無発話通知を送信できません:", error.message));
+}
+
 function isInConnectedVoiceChannel(interaction) {
   const connectedChannelId = getConnectedVoiceChannelId();
   return Boolean(connectedChannelId && interaction.member?.voice?.channelId === connectedChannelId);
@@ -397,7 +478,7 @@ async function connectTo(channel, sourceChannelId) {
     channelId: channel.id,
     guildId: channel.guild.id,
     adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: true,
+    selfDeaf: false,
   });
   connection.subscribe(player);
   connection.on("error", (error) => console.error("音声接続エラー:", error.message));
@@ -427,6 +508,8 @@ async function connectTo(channel, sourceChannelId) {
           activeConnection.destroy();
           connection = null;
           activeListeningChannelId = null;
+          lastVoiceActivityByUser.clear();
+          idleNoticeSentForUser.clear();
           console.error("再接続できませんでした。/join で再接続してください。");
         }
       } finally {
@@ -435,6 +518,7 @@ async function connectTo(channel, sourceChannelId) {
     })();
   });
   const activeConnection = connection;
+  resetVoiceActivityTracking(channel, activeConnection);
   await entersState(connection, VoiceConnectionStatus.Ready, config.voiceReadyTimeoutMs);
 }
 
@@ -446,6 +530,7 @@ client.once(Events.ClientReady, (readyClient) => {
   void announceBirthdaysForToday();
   void announceTodaysSeason();
   setInterval(() => void announceBirthdaysForToday(), 15_000);
+  setInterval(() => void checkVoiceInactivity(), 60_000);
   void announceWeeklyTopicIfDue();
   setInterval(() => void announceWeeklyTopicIfDue(), 60_000);
   scheduleNextSeasonMidnight();
@@ -1067,10 +1152,30 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     connection = null;
     activeListeningChannelId = null;
     queue.clear();
+    lastVoiceActivityByUser.clear();
+    idleNoticeSentForUser.clear();
     activeConnection.destroy();
     return;
   }
   const connectedVoiceChannelId = activeConnection?.joinConfig?.channelId;
+  if (activeConnection && newState.id !== client.user?.id) {
+    const wasInTarget = oldState.channelId === connectedVoiceChannelId;
+    const isInTarget = newState.channelId === connectedVoiceChannelId;
+    const voiceAvailabilityChanged = ["selfMute", "serverMute", "selfDeaf", "serverDeaf"]
+      .some((key) => oldState[key] !== newState[key]);
+    if (wasInTarget && !isInTarget) {
+      lastVoiceActivityByUser.delete(newState.id);
+      idleNoticeSentForUser.delete(newState.id);
+    } else if (isInTarget && (!wasInTarget || voiceAvailabilityChanged)) {
+      if (isVoiceActivityEligible(newState)) {
+        lastVoiceActivityByUser.set(newState.id, Date.now());
+        idleNoticeSentForUser.delete(newState.id);
+      } else {
+        lastVoiceActivityByUser.delete(newState.id);
+        idleNoticeSentForUser.delete(newState.id);
+      }
+    }
+  }
   if (activeConnection && oldState.channelId === connectedVoiceChannelId && newState.channelId !== connectedVoiceChannelId) {
     const voiceChannel = oldState.guild.channels.cache.get(connectedVoiceChannelId);
     const hasHumanMembers = voiceChannel?.members.some((member) => !member.user.bot) ?? true;
@@ -1081,6 +1186,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
       connection = null;
       activeListeningChannelId = null;
       queue.clear();
+      lastVoiceActivityByUser.clear();
+      idleNoticeSentForUser.clear();
       return;
     }
   }
@@ -1371,6 +1478,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       connection = null;
       activeListeningChannelId = null;
+      lastVoiceActivityByUser.clear();
+      idleNoticeSentForUser.clear();
       await interaction.reply({ content: "読み上げを停止して切断しました。" });
       return;
     }
