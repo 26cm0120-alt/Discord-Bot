@@ -783,10 +783,25 @@ function scheduleNextSeasonMidnight() {
 async function announceTodaysSeason() {
   const { year, month, day } = getJstDateParts();
   const today = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  if (guildSettings.seasonLastAnnouncedDate === today || !guildSettings.seasonChannelId) return;
+  if (guildSettings.seasonLastAnnouncedDate === today) {
+    console.info(`本日のステージローテーションは投稿済みのためスキップします: date=${today}`);
+    return;
+  }
+  if (!guildSettings.seasonChannelId) {
+    console.warn(`ステージローテーションをスキップします: 通知先未設定; date=${today}`);
+    return;
+  }
   const entry = guildSettings.seasonEntries.find((item) => item.date === today);
-  if (!entry || Date.now() - seasonRetryAt.value < 60_000) return;
+  if (!entry) {
+    console.info(`本日のステージ予定がないため投稿をスキップします: date=${today}`);
+    return;
+  }
+  if (Date.now() - seasonRetryAt.value < 60_000) {
+    console.info(`ステージローテーションの再試行間隔中です: date=${today}`);
+    return;
+  }
   seasonRetryAt.value = Date.now();
+  console.info(`本日のステージローテーションを投稿します: date=${today}; channel=${guildSettings.seasonChannelId}`);
   try {
     const channel = await client.channels.fetch(guildSettings.seasonChannelId);
     if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
