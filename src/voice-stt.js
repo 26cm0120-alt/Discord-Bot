@@ -15,6 +15,7 @@ export class VoiceSttWorker extends EventEmitter {
     this.ready = false;
     this.pending = new Map();
     this.maxPending = 6;
+    this.lastMalformedOutputAt = 0;
   }
 
   start() {
@@ -38,7 +39,11 @@ export class VoiceSttWorker extends EventEmitter {
       try {
         message = JSON.parse(line);
       } catch {
-        this.emit("workerError", new Error("音声認識ワーカーから不正な応答を受け取りました。"));
+        const now = Date.now();
+        if (now - this.lastMalformedOutputAt > 5000) {
+          this.lastMalformedOutputAt = now;
+          this.emit("workerLog", "認識ライブラリの非JSON出力を無視しました。");
+        }
         return;
       }
       if (message.type === "ready") {

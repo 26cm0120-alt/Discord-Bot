@@ -1,5 +1,6 @@
 import argparse
 import base64
+from contextlib import redirect_stdout
 from io import BytesIO
 import json
 import sys
@@ -18,9 +19,10 @@ def main():
     args = parser.parse_args()
 
     try:
-        from faster_whisper import WhisperModel
+        with redirect_stdout(sys.stderr):
+            from faster_whisper import WhisperModel
 
-        model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
+            model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
     except Exception as error:
         print(f"音声認識モデルを起動できません: {error}", file=sys.stderr, flush=True)
         return 1
@@ -31,18 +33,19 @@ def main():
         try:
             request = json.loads(line)
             wav = base64.b64decode(request["wav"], validate=True)
-            segments, _info = model.transcribe(
-                BytesIO(wav),
-                language="ja",
-                beam_size=1,
-                best_of=1,
-                temperature=0,
-                condition_on_previous_text=False,
-                vad_filter=False,
-                no_speech_threshold=0.6,
-                hotwords=request.get("hotwords") or None,
-            )
-            recognized = list(segments)
+            with redirect_stdout(sys.stderr):
+                segments, _info = model.transcribe(
+                    BytesIO(wav),
+                    language="ja",
+                    beam_size=1,
+                    best_of=1,
+                    temperature=0,
+                    condition_on_previous_text=False,
+                    vad_filter=False,
+                    no_speech_threshold=0.6,
+                    hotwords=request.get("hotwords") or None,
+                )
+                recognized = list(segments)
             text = "".join(segment.text for segment in recognized).strip()
             avg_logprob = (
                 sum(segment.avg_logprob for segment in recognized) / len(recognized)
