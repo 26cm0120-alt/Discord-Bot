@@ -1,12 +1,12 @@
 [
   {
-    "keywords": ["UBW", "無限の剣製", "ユービーダブリュー"],
+    "keywords": ["UBW", "無限の剣製", "むげんのけんせい", "アンリミテッドブレイドワークス", "アンリミテッドブレードワークス", "ユービーダブリュー"],
     "soundKey": "ubw",
     "volume": 0.1,
     "cooldownMs": 12000
   },
   {
-    "keywords": ["キュムロニンバス", "キュムロ"],
+    "keywords": ["キュムロニンバス", "キュムロニンパス", "キュムロリンバス", "キュムロ", "cumulonimbus"],
     "soundKey": "cumulo",
     "volume": 0.1,
     "cooldownMs": 12000

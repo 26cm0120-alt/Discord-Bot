@@ -67,7 +67,7 @@ const config = {
   voiceSttDevice: process.env.VOICE_STT_DEVICE ?? "cpu",
   voiceSttComputeType: process.env.VOICE_STT_COMPUTE_TYPE ?? "int8",
   voiceTriggerGlobalCooldownMs: Number(process.env.VOICE_TRIGGER_GLOBAL_COOLDOWN_MS ?? 3000),
-  voiceTriggerMinAvgLogProb: Number(process.env.VOICE_TRIGGER_MIN_AVG_LOG_PROB ?? -1.5),
+  voiceTriggerMinAvgLogProb: Number(process.env.VOICE_TRIGGER_MIN_AVG_LOG_PROB ?? -2.5),
 };
 function loadGptSovitsReferenceSet(language) {
   const suffix = language.toUpperCase();
