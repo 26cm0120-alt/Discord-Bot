@@ -62,6 +62,7 @@ const config = {
   ttsPlaybackVolume: Number.parseFloat(process.env.TTS_PLAYBACK_VOLUME ?? "0.65"),
   voiceReadyTimeoutMs: Number(process.env.VOICE_READY_TIMEOUT_MS ?? 15000),
   voiceSttEnabled: process.env.VOICE_STT_ENABLED === "true",
+  voiceSttLogTranscripts: process.env.VOICE_STT_LOG_TRANSCRIPTS === "true",
   voiceSttPythonPath: process.env.VOICE_STT_PYTHON_PATH || "python",
   voiceSttModel: process.env.VOICE_STT_MODEL ?? "base",
   voiceSttDevice: process.env.VOICE_STT_DEVICE ?? "cpu",
@@ -542,8 +543,21 @@ function resetVoiceActivityTracking(channel, activeConnection) {
         if (pcmBytes < 3200 || !voiceSttWorker) return;
         const pcm = Buffer.concat(pcmChunks, pcmBytes);
         const hotwords = voiceTriggerMappings.flatMap((entry) => entry.keywords).join("、").slice(0, 100);
+        const audioDurationMs = Math.round(pcmBytes / 32);
+        const transcriptionStartedAt = Date.now();
         const transcription = voiceSttWorker.transcribe(userId, makeMonoWav(pcm), hotwords);
         transcription?.then((result) => {
+          if (config.voiceSttLogTranscripts) {
+            console.info(JSON.stringify({
+              event: "voice_stt_transcript",
+              userId,
+              text: result?.text ?? "",
+              audioDurationMs,
+              processingMs: Date.now() - transcriptionStartedAt,
+              avgLogProb: result?.avgLogProb ?? null,
+              noSpeechProb: result?.noSpeechProb ?? null,
+            }));
+          }
           noteRecognizedVoiceActivity(result, activeConnection);
           handleVoiceTranscript(result);
         });

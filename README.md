@@ -65,6 +65,8 @@ Developer PortalでMessage Content Intentを有効にしてください。聞き
 
 音声はVCから一時的に受信してPC上で認識します。音声と文字起こしはファイルやログに保存しません。参加者へ機能を案内してから有効にしてください。
 
+認識結果を一時確認する場合のみ `.env` の `VOICE_STT_LOG_TRANSCRIPTS=true` にします。認識された文章がBotのコンソールに表示されるため、確認後は `false` に戻してください。
+
 ## GPT-SoVITSの参照音声モード（Windows）
 
 GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバインドします。GPT-SoVITS側の起動方法は公式READMEと`api_v2.py`のWebAPI説明を参照してください。APIは`POST /tts`へ読み上げ本文、参照音声のパス、参照音声の書き起こしを送り、WAVを返します。
