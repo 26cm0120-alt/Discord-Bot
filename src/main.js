@@ -244,6 +244,8 @@ const lastVoiceActivityByUser = new Map();
 const idleNoticeSentForUser = new Set();
 const lastVoiceTriggerAtBySound = new Map();
 let lastVoiceTriggerAt = 0;
+let voiceDecodeErrorLogAt = 0;
+let voiceDecodeErrorsSinceLog = 0;
 const intentionalDisconnects = new WeakSet();
 const queue = new SpeechQueue({
   player,
@@ -560,6 +562,7 @@ function resetVoiceActivityTracking(channel, activeConnection) {
       stream.on("data", (packet) => {
         if (connection !== activeConnection) return;
         try {
+          if (!packet.length) return;
           const decoded = decoder.decode(packet, 960);
           const converted = downsampleOpusPcmTo16kMono(decoded);
           if (!converted.length) return;
@@ -567,7 +570,13 @@ function resetVoiceActivityTracking(channel, activeConnection) {
           pcmBytes += converted.length;
           while (pcmBytes > maxPcmBytes && pcmChunks.length > 1) pcmBytes -= pcmChunks.shift().length;
         } catch (error) {
-          console.warn("音声パケットをデコードできません:", error.message);
+          voiceDecodeErrorsSinceLog += 1;
+          const now = Date.now();
+          if (now - voiceDecodeErrorLogAt >= 10_000) {
+            console.warn(`音声パケットのデコードに失敗しました（直近${voiceDecodeErrorsSinceLog}件）:`, error.message);
+            voiceDecodeErrorLogAt = now;
+            voiceDecodeErrorsSinceLog = 0;
+          }
         }
       });
     }
