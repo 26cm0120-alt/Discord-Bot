@@ -494,6 +494,16 @@ function handleVoiceTranscript(result) {
   console.info(JSON.stringify({ event: "voice_keyword_sound_queued", userId: result.userId, soundKey: mapping.soundKey }));
 }
 
+function noteRecognizedVoiceActivity(result, activeConnection) {
+  if (!result?.text?.trim() || result.avgLogProb < config.voiceTriggerMinAvgLogProb || result.noSpeechProb > 0.6) return;
+  if (connection !== activeConnection) return;
+  const channel = client.channels.cache.get(activeConnection.joinConfig.channelId);
+  const member = channel?.members?.get(result.userId);
+  if (!isVoiceActivityEligible(member?.voice)) return;
+  lastVoiceActivityByUser.set(result.userId, Date.now());
+  idleNoticeSentForUser.delete(result.userId);
+}
+
 function resetVoiceActivityTracking(channel, activeConnection) {
   lastVoiceActivityByUser.clear();
   idleNoticeSentForUser.clear();
@@ -531,13 +541,20 @@ function resetVoiceActivityTracking(channel, activeConnection) {
         const pcm = Buffer.concat(pcmChunks, pcmBytes);
         const hotwords = voiceTriggerMappings.flatMap((entry) => entry.keywords).join("、").slice(0, 100);
         const transcription = voiceSttWorker.transcribe(userId, makeMonoWav(pcm), hotwords);
-        transcription?.then(handleVoiceTranscript);
+        transcription?.then((result) => {
+          noteRecognizedVoiceActivity(result, activeConnection);
+          handleVoiceTranscript(result);
+        });
       });
     }
     stream.on("data", () => {
       if (connection !== activeConnection) return;
-      lastVoiceActivityByUser.set(userId, Date.now());
-      idleNoticeSentForUser.delete(userId);
+      // If local speech recognition is unavailable, retain packet-based activity as a fallback.
+      // With recognition ready, only recognized speech resets the inactivity timer.
+      if (!voiceSttWorker?.ready) {
+        lastVoiceActivityByUser.set(userId, Date.now());
+        idleNoticeSentForUser.delete(userId);
+      }
     });
     if (decoder) {
       stream.on("data", (packet) => {
