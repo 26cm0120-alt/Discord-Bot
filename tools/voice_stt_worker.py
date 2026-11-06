@@ -37,8 +37,8 @@ def main():
                 segments, _info = model.transcribe(
                     BytesIO(wav),
                     language="ja",
-                    beam_size=1,
-                    best_of=1,
+                    beam_size=5,
+                    best_of=5,
                     temperature=0,
                     condition_on_previous_text=False,
                     vad_filter=False,

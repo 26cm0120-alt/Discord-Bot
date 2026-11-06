@@ -59,7 +59,7 @@ Developer PortalでMessage Content Intentを有効にしてください。聞き
 
 ### 発話キーワードで効果音を流す
 
-この機能は初期状態では無効です。ローカルの faster-whisper が入っているPythonを `.env` の `VOICE_STT_PYTHON_PATH` に指定し、`VOICE_STT_ENABLED=true` にします。GPT-SoVITS Windows版のruntimeに faster-whisper がある場合は、その `runtime/python.exe` を指定できます。`VOICE_STT_MODEL=base`、`VOICE_STT_DEVICE=cpu`、`VOICE_STT_COMPUTE_TYPE=int8` が初期値です。初回起動時にモデルが未取得ならダウンロードされます。
+この機能は初期状態では無効です。ローカルの faster-whisper が入っているPythonを `.env` の `VOICE_STT_PYTHON_PATH` に指定し、`VOICE_STT_ENABLED=true` にします。GPT-SoVITS Windows版のruntimeに faster-whisper がある場合は、その `runtime/python.exe` を指定できます。`VOICE_STT_MODEL=base`、`VOICE_STT_DEVICE=cpu`、`VOICE_STT_COMPUTE_TYPE=int8` が初期値です。NVIDIA CUDA対応GPUを使う場合は `medium` / `cuda` / `int8_float16` に設定すると認識精度を高められます。音声認識はbeam size 5で行います。初回起動時にモデルが未取得ならダウンロードされます。
 
 `assets/voice-triggers.json` にキーワード、音源キー、音量、クールダウンを設定します。初期設定は「UBW / 無限の剣製 → ubw」「キュムロニンバス → cumulo」です。音声本体は既存の `assets/voice-clips.local.json` から読み、GitHubには含めません。BotがVC接続中に人の発話を認識すると、該当する効果音を読み上げ列へ追加します。`/status` で音声認識の稼働状態を確認できます。
 
