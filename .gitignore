@@ -1,4 +1,8 @@
 node_modules/
+__pycache__/
+*.py[cod]
+.venv-kws/
+assets/voice-kws-model/
 .env
 logs/
 *.wav
@@ -13,4 +17,3 @@ logs/
 
 
 /assets/gpt-sovits/transcriptions.csv
-

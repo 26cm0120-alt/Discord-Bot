@@ -107,4 +107,3 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 console.log("サーバー専用スラッシュコマンドを登録しました。");
-

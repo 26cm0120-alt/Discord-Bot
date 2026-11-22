@@ -14,7 +14,8 @@ export class VoiceSttWorker extends EventEmitter {
     this.child = null;
     this.ready = false;
     this.pending = new Map();
-    this.maxPending = 6;
+    // One request is running and at most one waits behind it; stale speech is discarded.
+    this.maxPending = 2;
     this.lastMalformedOutputAt = 0;
   }
 
@@ -26,7 +27,11 @@ export class VoiceSttWorker extends EventEmitter {
         "--model", this.model,
         "--device", this.device,
         "--compute-type", this.computeType,
-      ], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      ], {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        env: { ...process.env, PYTHONUTF8: "1" },
+      });
     } catch (error) {
       this.emit("workerError", error);
       return;
@@ -123,4 +128,3 @@ export class VoiceSttWorker extends EventEmitter {
     this.pending.clear();
   }
 }
-

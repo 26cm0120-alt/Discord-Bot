@@ -29,6 +29,9 @@ import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
 import { GptSovitsClient } from "./gpt-sovits.js";
 import { VoiceSttWorker } from "./voice-stt.js";
+import { VoiceKwsWorker } from "./voice-kws.js";
+import { hasHumanVoiceMember } from "./voice-channel-members.js";
+import { getMessageTextForSpeech, markLinksForSpeech } from "./message-speech-filter.js";
 import { splitTextByLanguage } from "./language-segments.js";
 import { formatEndpointStatus, probeEndpoint } from "./engine-health.js";
 
@@ -62,13 +65,16 @@ const config = {
   ttsPlaybackVolume: Number.parseFloat(process.env.TTS_PLAYBACK_VOLUME ?? "0.65"),
   voiceReadyTimeoutMs: Number(process.env.VOICE_READY_TIMEOUT_MS ?? 15000),
   voiceSttEnabled: process.env.VOICE_STT_ENABLED === "true",
-  voiceSttLogTranscripts: process.env.VOICE_STT_LOG_TRANSCRIPTS === "true",
   voiceSttPythonPath: process.env.VOICE_STT_PYTHON_PATH || "python",
   voiceSttModel: process.env.VOICE_STT_MODEL ?? "base",
   voiceSttDevice: process.env.VOICE_STT_DEVICE ?? "cpu",
   voiceSttComputeType: process.env.VOICE_STT_COMPUTE_TYPE ?? "int8",
+  voiceKwsEnabled: process.env.VOICE_KWS_ENABLED === "true",
+  voiceKwsPythonPath: process.env.VOICE_KWS_PYTHON_PATH || process.env.VOICE_STT_PYTHON_PATH || "python",
+  voiceKwsModelDir: resolve(process.cwd(), process.env.VOICE_KWS_MODEL_DIR ?? "assets/voice-kws-model/sherpa-onnx"),
   voiceTriggerGlobalCooldownMs: Number(process.env.VOICE_TRIGGER_GLOBAL_COOLDOWN_MS ?? 3000),
   voiceTriggerMinAvgLogProb: Number(process.env.VOICE_TRIGGER_MIN_AVG_LOG_PROB ?? -2.5),
+  voiceActivityRmsThreshold: Number(process.env.VOICE_ACTIVITY_RMS_THRESHOLD ?? 300),
 };
 function loadGptSovitsReferenceSet(language) {
   const suffix = language.toUpperCase();
@@ -213,7 +219,9 @@ try {
   console.error("入退室音声を読み込めません。音声なしで案内します:", error.message);
 }
 const voiceTriggerConfigPath = resolve(process.cwd(), "assets", "voice-triggers.json");
+const voiceKwsKeywordsPath = resolve(process.cwd(), "assets", "voice-kws-keywords.json");
 let voiceTriggerMappings = [];
+let voiceKwsKeywords = [];
 try {
   const configuredMappings = JSON.parse(readFileSync(voiceTriggerConfigPath, "utf8"));
   if (Array.isArray(configuredMappings)) {
@@ -223,6 +231,9 @@ try {
         || !voiceClips[mapping.soundKey].length) return [];
       return [{
         keywords: mapping.keywords.filter((keyword) => typeof keyword === "string" && keyword.trim()),
+        hotwords: Array.isArray(mapping.hotwords)
+          ? mapping.hotwords.filter((keyword) => typeof keyword === "string" && keyword.trim())
+          : [],
         soundKey: mapping.soundKey,
         volume: Number.isFinite(mapping.volume) ? Math.min(1, Math.max(0, mapping.volume)) : 0.1,
         cooldownMs: Number.isFinite(mapping.cooldownMs) ? Math.max(1000, mapping.cooldownMs) : 12000,
@@ -232,6 +243,18 @@ try {
 } catch (error) {
   console.warn("音声キーワード設定を読み込めません:", error.message);
 }
+try {
+  const configuredKeywords = JSON.parse(readFileSync(voiceKwsKeywordsPath, "utf8"));
+  if (Array.isArray(configuredKeywords)) {
+    voiceKwsKeywords = configuredKeywords.filter((entry) =>
+      typeof entry?.keyword === "string" && entry.keyword.trim()
+      && typeof entry?.reading === "string" && entry.reading.trim()
+      && typeof entry?.soundKey === "string" && voiceClips[entry.soundKey]?.length,
+    );
+  }
+} catch (error) {
+  console.warn("KWSキーワード設定を読み込めません:", error.message);
+}
 const voicePreferencesByUser = new Map();
 const supikiUsers = new Set();
 const gptSovitsLanguageByUser = new Map(
@@ -239,6 +262,7 @@ const gptSovitsLanguageByUser = new Map(
 );
 let connection = null;
 let activeListeningChannelId = null;
+let emptyVoiceDisconnectTimer = null;
 let lastMetric = null;
 const IDLE_SPEECH_THRESHOLD_MS = 30 * 60 * 1000;
 const lastVoiceActivityByUser = new Map();
@@ -268,11 +292,29 @@ const voiceSttWorker = config.voiceSttEnabled
     computeType: config.voiceSttComputeType,
   })
   : null;
+const voiceKwsWorker = config.voiceKwsEnabled
+  ? new VoiceKwsWorker({
+    pythonPath: config.voiceKwsPythonPath,
+    scriptPath: resolve(process.cwd(), "tools", "voice_kws_worker.py"),
+    modelDir: config.voiceKwsModelDir,
+    keywords: voiceKwsKeywords,
+  })
+  : null;
 voiceSttWorker?.on("ready", ({ model, device }) => console.log(`VC音声認識を開始しました（${model} / ${device}）。`));
 voiceSttWorker?.on("workerLog", (message) => console.info(`[voice-stt] ${message}`));
 voiceSttWorker?.on("workerError", (error) => console.error("VC音声認識エラー:", error.message));
 voiceSttWorker?.start();
+voiceKwsWorker?.on("ready", ({ keywordCount }) => console.log(`日本語KWSを開始しました（${keywordCount}語）。`));
+voiceKwsWorker?.on("workerLog", (message) => console.info(`[voice-kws] ${message}`));
+voiceKwsWorker?.on("workerError", (error) => console.error("VCキーワード検出エラー:", error.message));
+voiceKwsWorker?.on("hit", ({ userId, keyword }) => {
+  const configured = voiceKwsKeywords.find((entry) => entry.keyword === keyword);
+  if (configured) console.info(JSON.stringify({ event: "voice_kws_detected", soundKey: configured.soundKey }));
+  handleVoiceKeywordHit(userId, keyword);
+});
+voiceKwsWorker?.start();
 process.once("exit", () => voiceSttWorker?.stop());
+process.once("exit", () => voiceKwsWorker?.stop());
 let speakerStylesCache = [];
 let speakerStylesCacheAt = 0;
 
@@ -306,12 +348,7 @@ const alphabetNames = {
 function replaceLinks(text) {
   const mode = guildSettings.linkSpeechMode;
   if (mode === "keep") return text;
-  if (mode === "omit") {
-    return text
-      .replace(/\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/giu, "リンク省略")
-      .replace(/<((?:https?:\/\/|www\.)[^>]+)>/giu, "リンク省略")
-      .replace(/(?:https?:\/\/|www\.)[^\s<>]+/giu, "リンク省略");
-  }
+  if (mode === "omit") return markLinksForSpeech(text);
   const toSpeech = (url) => {
     const cleaned = url.replace(/[.,!?;:、。！？）)]+$/u, "");
     try {
@@ -427,6 +464,11 @@ function getConnectedVoiceChannelId() {
   return connection?.joinConfig?.channelId ?? null;
 }
 
+function cancelPendingEmptyVoiceDisconnect() {
+  if (emptyVoiceDisconnectTimer) clearTimeout(emptyVoiceDisconnectTimer);
+  emptyVoiceDisconnectTimer = null;
+}
+
 function isVoiceActivityEligible(voiceState) {
   return Boolean(
     voiceState
@@ -441,6 +483,15 @@ function isVoiceActivityEligible(voiceState) {
 
 function normalizeVoiceTriggerText(text) {
   return text.normalize("NFKC").toLocaleLowerCase("ja-JP").replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+function matchesVoiceTriggerKeyword(text, keyword) {
+  const normalizedKeyword = normalizeVoiceTriggerText(keyword);
+  if (/^[a-z0-9]+$/.test(normalizedKeyword)) {
+    const latinWords = text.normalize("NFKC").toLocaleLowerCase("ja-JP").match(/[a-z0-9]+/g) ?? [];
+    return latinWords.includes(normalizedKeyword);
+  }
+  return normalizeVoiceTriggerText(text).includes(normalizedKeyword);
 }
 
 function makeMonoWav(pcm) {
@@ -476,11 +527,7 @@ function downsampleOpusPcmTo16kMono(pcm) {
   return output;
 }
 
-function handleVoiceTranscript(result) {
-  if (!result?.text || result.avgLogProb < config.voiceTriggerMinAvgLogProb || result.noSpeechProb > 0.6) return;
-  const normalizedText = normalizeVoiceTriggerText(result.text);
-  if (!normalizedText) return;
-  const mapping = voiceTriggerMappings.find((entry) => entry.keywords.some((keyword) => normalizedText.includes(normalizeVoiceTriggerText(keyword))));
+function queueVoiceKeywordSound(userId, mapping) {
   if (!mapping) return;
   const now = Date.now();
   const lastBySound = lastVoiceTriggerAtBySound.get(mapping.soundKey) ?? 0;
@@ -489,22 +536,53 @@ function handleVoiceTranscript(result) {
   if (!buffer?.length) return;
   const queued = enqueueSegments({
     segments: [{ type: "audio", buffer, volume: mapping.volume }],
-    authorId: result.userId,
+    authorId: userId,
   });
   if (!queued.accepted) return;
   lastVoiceTriggerAt = now;
   lastVoiceTriggerAtBySound.set(mapping.soundKey, now);
-  console.info(JSON.stringify({ event: "voice_keyword_sound_queued", userId: result.userId, soundKey: mapping.soundKey }));
+  console.info(JSON.stringify({ event: "voice_keyword_sound_queued", userId, soundKey: mapping.soundKey }));
 }
 
-function noteRecognizedVoiceActivity(result, activeConnection) {
-  if (!result?.text?.trim() || result.avgLogProb < config.voiceTriggerMinAvgLogProb || result.noSpeechProb > 0.6) return;
+function handleVoiceTranscript(result) {
+  if (!result?.text || result.avgLogProb < config.voiceTriggerMinAvgLogProb || result.noSpeechProb > 0.6) return;
+  const mapping = voiceTriggerMappings.find((entry) => entry.keywords.some((keyword) => matchesVoiceTriggerKeyword(result.text, keyword)));
+  queueVoiceKeywordSound(result.userId, mapping);
+}
+
+function handleVoiceKeywordHit(userId, keyword) {
+  const configured = voiceKwsKeywords.find((entry) => entry.keyword === keyword);
+  if (!configured) return;
+  const trigger = voiceTriggerMappings.find((entry) => entry.soundKey === configured.soundKey);
+  queueVoiceKeywordSound(userId, {
+    soundKey: configured.soundKey,
+    volume: configured.volume ?? trigger?.volume ?? 0.1,
+    cooldownMs: configured.cooldownMs ?? trigger?.cooldownMs ?? 12000,
+  });
+}
+
+function markVoiceActivity(userId, activeConnection) {
   if (connection !== activeConnection) return;
   const channel = client.channels.cache.get(activeConnection.joinConfig.channelId);
-  const member = channel?.members?.get(result.userId);
+  const member = channel?.members?.get(userId);
   if (!isVoiceActivityEligible(member?.voice)) return;
-  lastVoiceActivityByUser.set(result.userId, Date.now());
-  idleNoticeSentForUser.delete(result.userId);
+  lastVoiceActivityByUser.set(userId, Date.now());
+  idleNoticeSentForUser.delete(userId);
+}
+
+function hasVoiceActivityEnergy(pcm) {
+  const sampleCount = Math.floor(pcm.length / 2);
+  if (!sampleCount) return false;
+  let sumSquares = 0;
+  let peak = 0;
+  for (let offset = 0; offset < sampleCount * 2; offset += 2) {
+    const sample = pcm.readInt16LE(offset);
+    const magnitude = Math.abs(sample);
+    sumSquares += sample * sample;
+    if (magnitude > peak) peak = magnitude;
+  }
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  return rms >= config.voiceActivityRmsThreshold && peak >= config.voiceActivityRmsThreshold * 2;
 }
 
 function resetVoiceActivityTracking(channel, activeConnection) {
@@ -527,8 +605,18 @@ function resetVoiceActivityTracking(channel, activeConnection) {
     const cleanupStream = () => {
       if (receiveStreams.get(userId) === stream) receiveStreams.delete(userId);
     };
-    const decoder = voiceSttWorker ? new OpusScript(48000, 2, OpusScript.Application.AUDIO) : null;
+    const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+    const kwsStream = Boolean(voiceKwsWorker?.ready);
+    const transcribeStream = !kwsStream && Boolean(voiceSttWorker?.ready);
+    if (kwsStream) voiceKwsWorker.beginStream(userId);
+    let kwsStreamFinalized = false;
+    let kwsPcmBytes = 0;
     let decoderClosed = false;
+    const finalizeKwsStream = () => {
+      if (!kwsStream || kwsStreamFinalized) return;
+      kwsStreamFinalized = true;
+      voiceKwsWorker?.endStream(userId);
+    };
     const closeDecoder = () => {
       if (!decoder || decoderClosed) return;
       decoderClosed = true;
@@ -536,73 +624,69 @@ function resetVoiceActivityTracking(channel, activeConnection) {
     };
     const pcmChunks = [];
     let pcmBytes = 0;
+    let speechEnergyPackets = 0;
+    let lastSpeechEnergyAt = 0;
     const maxPcmBytes = 16000 * 2 * 30;
-    if (decoder) {
-      stream.once("end", () => {
-        closeDecoder();
-        if (pcmBytes < 3200 || !voiceSttWorker) return;
-        const pcm = Buffer.concat(pcmChunks, pcmBytes);
-        const hotwords = voiceTriggerMappings.flatMap((entry) => entry.keywords).join("、").slice(0, 100);
-        const audioDurationMs = Math.round(pcmBytes / 32);
-        const transcriptionStartedAt = Date.now();
-        const transcription = voiceSttWorker.transcribe(userId, makeMonoWav(pcm), hotwords);
-        transcription?.then((result) => {
-          if (config.voiceSttLogTranscripts) {
-            console.info(JSON.stringify({
-              event: "voice_stt_transcript",
-              userId,
-              text: result?.text ?? "",
-              audioDurationMs,
-              processingMs: Date.now() - transcriptionStartedAt,
-              avgLogProb: result?.avgLogProb ?? null,
-              noSpeechProb: result?.noSpeechProb ?? null,
-            }));
-          }
-          noteRecognizedVoiceActivity(result, activeConnection);
-          handleVoiceTranscript(result);
-        });
-      });
-    }
-    stream.on("data", () => {
-      if (connection !== activeConnection) return;
-      // If local speech recognition is unavailable, retain packet-based activity as a fallback.
-      // With recognition ready, only recognized speech resets the inactivity timer.
-      if (!voiceSttWorker?.ready) {
-        lastVoiceActivityByUser.set(userId, Date.now());
-        idleNoticeSentForUser.delete(userId);
+    stream.once("end", () => {
+      closeDecoder();
+      if (kwsStream) {
+        console.info(JSON.stringify({
+          event: "voice_kws_stream_ended",
+          audioDurationMs: Math.round(kwsPcmBytes / 32),
+        }));
+        finalizeKwsStream();
       }
+      if (!transcribeStream || pcmBytes < 3200 || !voiceSttWorker?.ready) return;
+      const pcm = Buffer.concat(pcmChunks, pcmBytes);
+      const hotwords = voiceTriggerMappings.flatMap((entry) => entry.hotwords ?? []).join("、").slice(0, 100);
+      const transcription = voiceSttWorker.transcribe(userId, makeMonoWav(pcm), hotwords);
+      transcription?.then(handleVoiceTranscript);
     });
-    if (decoder) {
-      stream.on("data", (packet) => {
-        if (connection !== activeConnection) return;
-        try {
-          if (!packet.length) return;
-          const decoded = decoder.decode(packet, 960);
-          const converted = downsampleOpusPcmTo16kMono(decoded);
-          if (!converted.length) return;
+    stream.on("data", (packet) => {
+      if (connection !== activeConnection) return;
+      try {
+        if (!packet.length) return;
+        const decoded = decoder.decode(packet, 960);
+        const converted = downsampleOpusPcmTo16kMono(decoded);
+        if (!converted.length) return;
+        const now = Date.now();
+        if (hasVoiceActivityEnergy(converted)) {
+          speechEnergyPackets = now - lastSpeechEnergyAt <= 120 ? speechEnergyPackets + 1 : 1;
+          lastSpeechEnergyAt = now;
+          if (speechEnergyPackets >= 3) markVoiceActivity(userId, activeConnection);
+        } else if (now - lastSpeechEnergyAt > 120) {
+          speechEnergyPackets = 0;
+        }
+        if (transcribeStream) {
           pcmChunks.push(converted);
           pcmBytes += converted.length;
           while (pcmBytes > maxPcmBytes && pcmChunks.length > 1) pcmBytes -= pcmChunks.shift().length;
-        } catch (error) {
-          voiceDecodeErrorsSinceLog += 1;
-          const now = Date.now();
-          if (now - voiceDecodeErrorLogAt >= 10_000) {
-            console.warn(`音声パケットのデコードに失敗しました（直近${voiceDecodeErrorsSinceLog}件）:`, error.message);
-            voiceDecodeErrorLogAt = now;
-            voiceDecodeErrorsSinceLog = 0;
-          }
         }
-      });
-    }
+        if (kwsStream) {
+          kwsPcmBytes += converted.length;
+          voiceKwsWorker?.acceptAudio(userId, converted);
+        }
+      } catch (error) {
+        voiceDecodeErrorsSinceLog += 1;
+        const now = Date.now();
+        if (now - voiceDecodeErrorLogAt >= 10_000) {
+          console.warn(`音声パケットのデコードに失敗しました（直近${voiceDecodeErrorsSinceLog}件）:`, error.message);
+          voiceDecodeErrorLogAt = now;
+          voiceDecodeErrorsSinceLog = 0;
+        }
+      }
+    });
     stream.once("error", (error) => {
       cleanupStream();
       closeDecoder();
+      finalizeKwsStream();
       console.warn(JSON.stringify({ event: "voice_activity_receive_error", userId, message: error.message }));
     });
     stream.once("end", cleanupStream);
     stream.once("close", () => {
       cleanupStream();
       closeDecoder();
+      finalizeKwsStream();
     });
   });
 }
@@ -623,19 +707,23 @@ async function checkVoiceInactivity() {
       continue;
     }
     if (now - lastActivityAt < IDLE_SPEECH_THRESHOLD_MS || idleNoticeSentForUser.has(userId)) continue;
-    idleNoticeSentForUser.add(userId);
-    newlyIdle.push(member.displayName);
+    newlyIdle.push({ userId, displayName: member.displayName });
   }
   if (!newlyIdle.length) return;
 
-  const noticeChannel = client.channels.cache.get(activeListeningChannelId ?? voiceChannel.id);
+  const noticeChannelId = activeListeningChannelId ?? voiceChannel.id;
+  const noticeChannel = await client.channels.fetch(noticeChannelId).catch(() => null);
   if (typeof noticeChannel?.send !== "function") {
-    console.warn(JSON.stringify({ event: "voice_inactivity_notice_unavailable", channelId: noticeChannel?.id ?? null }));
+    console.warn(JSON.stringify({ event: "voice_inactivity_notice_unavailable", channelId: noticeChannelId }));
     return;
   }
-  const names = newlyIdle.map((name) => name.replace(/@/g, "アット")).join("、");
-  await noticeChannel.send(`🔕 ${names}さんは30分以上発話が検出されていません。離席中とは限らないため、必要なら本人に確認してください。`)
-    .catch((error) => console.warn("無発話通知を送信できません:", error.message));
+  const names = newlyIdle.map(({ displayName }) => displayName.replace(/@/g, "アット")).join("、");
+  try {
+    await noticeChannel.send(`🔕 ${names}さんは30分以上発話が検出されていません。離席中とは限らないため、必要なら本人に確認してください。`);
+    for (const { userId } of newlyIdle) idleNoticeSentForUser.add(userId);
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "voice_inactivity_notice_send_failed", channelId: noticeChannelId, message: error.message }));
+  }
 }
 
 function isInConnectedVoiceChannel(interaction) {
@@ -651,6 +739,7 @@ function hasCommunityAccess(interaction) {
   return Array.isArray(roles) ? roles.includes(roleId) : Boolean(roles?.cache?.has(roleId));
 }
 async function connectTo(channel, sourceChannelId) {
+  cancelPendingEmptyVoiceDisconnect();
   activeListeningChannelId = sourceChannelId === channel.id ? null : sourceChannelId;
   if (connection) {
     intentionalDisconnects.add(connection);
@@ -862,20 +951,20 @@ const weeklyTopics = [
   "対戦ゲームと協力ゲーム、今日はどちらの気分？理由もあればぜひ。",
 ];
 
-function recruitmentPanelPayload() {
+function recruitmentPanelPayload(channelId) {
   return {
     embeds: [new EmbedBuilder()
       .setTitle("一緒に遊ぶ人を募集しよう")
       .setDescription("下のボタンから募集を作れます。ゲーム名・時間・募集人数・初心者歓迎かどうかを入力してください。募集を見た人は参加ボタンで表明できます。\n\n`@everyone` は使わず、気軽に募集してください。")
       .setColor(0x5865f2)],
     components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("community:recruit:create").setLabel("募集を作る").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`community:recruit:create:${channelId}`).setLabel("募集を作る").setStyle(ButtonStyle.Primary),
     )],
   };
 }
 
-function recruitmentModal() {
-  const modal = new ModalBuilder().setCustomId("community:recruit:submit").setTitle("ゲーム募集を作成");
+function recruitmentModal(channelId) {
+  const modal = new ModalBuilder().setCustomId(`community:recruit:submit:${channelId}`).setTitle("ゲーム募集を作成");
   const fields = [
     new TextInputBuilder().setCustomId("game").setLabel("ゲーム名").setStyle(TextInputStyle.Short).setMaxLength(80).setRequired(true),
     new TextInputBuilder().setCustomId("when").setLabel("日時・集合時間").setStyle(TextInputStyle.Short).setPlaceholder("例：今日 21時ごろ / 11月8日 20:00").setMaxLength(100).setRequired(true),
@@ -1153,16 +1242,22 @@ function pruneTournaments() {
 
 async function handleCommunityComponent(interaction) {
   if (interaction.isButton()) {
-    const [scope, kind, action, messageId] = interaction.customId.split(":");
+    const [scope, kind, action, messageId, sourceChannelId] = interaction.customId.split(":");
     if (scope !== "community") return false;
     if (kind === "recruit" && action === "create") {
-      await interaction.showModal(recruitmentModal());
+      const channelId = sourceChannelId ?? interaction.channelId;
+      await interaction.showModal(recruitmentModal(channelId));
       return true;
     }
     if (kind !== "recruit" || !["join", "close"].includes(action) || !messageId) return false;
     const recruitment = guildSettings.community.recruitments[messageId];
     if (!recruitment || recruitment.guildId !== config.guildId) {
+      console.warn(JSON.stringify({ event: "recruitment_interaction_missing_state", messageId, action, channelId: interaction.channelId }));
       await interaction.reply({ content: "この募集情報は見つからないか、期限切れです。" });
+      return true;
+    }
+    if (interaction.channelId !== recruitment.channelId) {
+      await interaction.reply({ content: `この募集は <#${recruitment.channelId}> で操作してください。` });
       return true;
     }
     if (action === "close") {
@@ -1190,6 +1285,7 @@ async function handleCommunityComponent(interaction) {
       participants.splice(index, 1);
       saveGuildSettings();
       await interaction.update(recruitmentMessagePayload(recruitment));
+      console.info(JSON.stringify({ event: "recruitment_participant_updated", messageId, channelId: recruitment.channelId, count: participants.length + 1 }));
       return true;
     }
     if (participants.length + 1 >= recruitment.capacity) {
@@ -1199,10 +1295,13 @@ async function handleCommunityComponent(interaction) {
     participants.push(interaction.user.id);
     saveGuildSettings();
     await interaction.update(recruitmentMessagePayload(recruitment));
+    console.info(JSON.stringify({ event: "recruitment_participant_updated", messageId, channelId: recruitment.channelId, count: participants.length + 1 }));
     return true;
   }
 
-  if (interaction.isModalSubmit() && interaction.customId === "community:recruit:submit") {
+  if (interaction.isModalSubmit()
+    && (interaction.customId === "community:recruit:submit" || interaction.customId.startsWith("community:recruit:submit:"))) {
+    const [, , , sourceChannelId] = interaction.customId.split(":");
     const audience = interaction.fields.getTextInputValue("audience").trim();
     if (!["初心者歓迎", "誰でも", "経験者向け"].includes(audience)) {
       await interaction.reply({ content: "参加しやすさは「初心者歓迎」「誰でも」「経験者向け」から選んで入力してください。" });
@@ -1213,7 +1312,7 @@ async function handleCommunityComponent(interaction) {
       await interaction.reply({ content: "募集人数は主催者を含めて2〜99人で入力してください。" });
       return true;
     }
-    const channel = interaction.channel;
+    const channel = await client.channels.fetch(sourceChannelId ?? interaction.channelId).catch(() => null);
     if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
       await interaction.reply({ content: "サーバー内のテキストチャンネルから募集を作成してください。" });
       return true;
@@ -1231,12 +1330,23 @@ async function handleCommunityComponent(interaction) {
       createdAt: Date.now(),
       closed: false,
     };
-    const message = await channel.send(recruitmentMessagePayload({ ...recruitment, messageId: "pending" }));
+    const initialPayload = recruitmentMessagePayload({ ...recruitment, messageId: "pending" });
+    const message = await channel.send({ ...initialPayload, components: [] });
     recruitment.messageId = message.id;
-    await message.edit(recruitmentMessagePayload(recruitment));
-    guildSettings.community.recruitments[message.id] = recruitment;
-    pruneRecruitments();
-    saveGuildSettings();
+    try {
+      guildSettings.community.recruitments[message.id] = recruitment;
+      pruneRecruitments();
+      saveGuildSettings();
+      await message.edit(recruitmentMessagePayload(recruitment));
+    } catch (error) {
+      delete guildSettings.community.recruitments[message.id];
+      try { saveGuildSettings(); } catch (saveError) {
+        console.error("募集登録のロールバックに失敗しました:", saveError.message);
+      }
+      await message.delete().catch(() => {});
+      throw error;
+    }
+    console.info(JSON.stringify({ event: "recruitment_created", messageId: message.id, channelId: channel.id }));
     await interaction.reply({ content: `募集を ${channel} に投稿しました。` });
     return true;
   }
@@ -1249,7 +1359,12 @@ async function handleTournamentComponent(interaction) {
   if (scope !== "tournament" || !messageId) return false;
   const tournament = guildSettings.community.tournaments[messageId];
   if (!tournament || tournament.guildId !== config.guildId) {
+    console.warn(JSON.stringify({ event: "tournament_interaction_missing_state", messageId, action, channelId: interaction.channelId }));
     await interaction.reply({ content: "このトーナメントは見つからないか、期限切れです。" });
+    return true;
+  }
+  if (interaction.channelId !== tournament.channelId) {
+    await interaction.reply({ content: `このトーナメントは <#${tournament.channelId}> で操作してください。` });
     return true;
   }
 
@@ -1266,6 +1381,7 @@ async function handleTournamentComponent(interaction) {
     } else tournament.participantIds.push(interaction.user.id);
     saveGuildSettings();
     await interaction.update(tournamentMessagePayload(tournament));
+    console.info(JSON.stringify({ event: "tournament_participant_updated", messageId, channelId: tournament.channelId, count: tournament.participantIds.length }));
     return true;
   }
 
@@ -1329,7 +1445,7 @@ client.on(Events.MessageCreate, (message) => {
   if (message.guildId !== config.guildId || (!isConnectedVoiceChat && !isListeningOnlyChat)) return;
   if (message.author.bot || !connection || connection.state.status !== VoiceConnectionStatus.Ready) return;
 
-  const result = enqueueText({ text: message.cleanContent, authorId: message.author.id, receivedAt: Date.now() });
+  const result = enqueueText({ text: getMessageTextForSpeech(message), authorId: message.author.id, receivedAt: Date.now() });
   if (!result.accepted && result.reason !== "empty") {
     console.warn(JSON.stringify({ event: "queue_full", guildId: message.guildId }));
   }
@@ -1360,6 +1476,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     const isInTarget = newState.channelId === connectedVoiceChannelId;
     const voiceAvailabilityChanged = ["selfMute", "serverMute", "selfDeaf", "serverDeaf"]
       .some((key) => oldState[key] !== newState[key]);
+    if (isInTarget) cancelPendingEmptyVoiceDisconnect();
     if (wasInTarget && !isInTarget) {
       lastVoiceActivityByUser.delete(newState.id);
       idleNoticeSentForUser.delete(newState.id);
@@ -1372,20 +1489,23 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
         idleNoticeSentForUser.delete(newState.id);
       }
     }
-  }
-  if (activeConnection && oldState.channelId === connectedVoiceChannelId && newState.channelId !== connectedVoiceChannelId) {
-    const voiceChannel = oldState.guild.channels.cache.get(connectedVoiceChannelId);
-    const hasHumanMembers = voiceChannel?.members.some((member) => !member.user.bot) ?? true;
-    if (!hasHumanMembers && connection === activeConnection) {
-      console.info(JSON.stringify({ event: "voice_auto_disconnect_empty", guildId: oldState.guild.id, channelId: connectedVoiceChannelId }));
-      intentionalDisconnects.add(activeConnection);
-      activeConnection.destroy();
-      connection = null;
-      activeListeningChannelId = null;
-      queue.clear();
-      lastVoiceActivityByUser.clear();
-      idleNoticeSentForUser.clear();
-      return;
+
+    if (wasInTarget && !isInTarget) {
+      cancelPendingEmptyVoiceDisconnect();
+      emptyVoiceDisconnectTimer = setTimeout(() => {
+        emptyVoiceDisconnectTimer = null;
+        if (connection !== activeConnection) return;
+        if (hasHumanVoiceMember(oldState.guild, connectedVoiceChannelId, client.user?.id)) return;
+
+        console.info(JSON.stringify({ event: "voice_auto_disconnect_empty", guildId: oldState.guild.id, channelId: connectedVoiceChannelId }));
+        intentionalDisconnects.add(activeConnection);
+        connection = null;
+        activeListeningChannelId = null;
+        queue.clear();
+        lastVoiceActivityByUser.clear();
+        idleNoticeSentForUser.clear();
+        activeConnection.destroy();
+      }, 1000);
     }
   }
   if (!guildSettings.announceVoiceEvents) return;
@@ -1470,12 +1590,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPlayedMatch: false,
         createdAt: Date.now(),
       };
-      const message = await channel.send(tournamentMessagePayload({ ...tournament, messageId: "pending" }));
+      const initialPayload = tournamentMessagePayload({ ...tournament, messageId: "pending" });
+      const message = await channel.send({ ...initialPayload, components: [] });
       tournament.messageId = message.id;
-      await message.edit(tournamentMessagePayload(tournament));
-      guildSettings.community.tournaments[message.id] = tournament;
-      pruneTournaments();
-      saveGuildSettings();
+      try {
+        guildSettings.community.tournaments[message.id] = tournament;
+        pruneTournaments();
+        saveGuildSettings();
+        await message.edit(tournamentMessagePayload(tournament));
+      } catch (error) {
+        delete guildSettings.community.tournaments[message.id];
+        try { saveGuildSettings(); } catch (saveError) {
+          console.error("トーナメント登録のロールバックに失敗しました:", saveError.message);
+        }
+        await message.delete().catch(() => {});
+        throw error;
+      }
+      console.info(JSON.stringify({ event: "tournament_created", messageId: message.id, channelId: channel.id }));
       await interaction.reply({ content: `3対3トーナメントの参加受付を ${channel} に投稿しました。` });
       return;
     }
@@ -1576,13 +1707,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({ content: "話題の投稿先にはサーバー内のテキストチャンネルを指定してください。" });
           return;
         }
+        const topicDay = interaction.options.getInteger("day", true);
+        const topicHour = interaction.options.getInteger("hour", true);
+        const topicSettingsChanged = guildSettings.community.topicChannelId !== channel.id
+          || guildSettings.community.topicDay !== topicDay
+          || guildSettings.community.topicHour !== topicHour;
         guildSettings.community.topicChannelId = channel.id;
-        guildSettings.community.topicDay = interaction.options.getInteger("day", true);
-        guildSettings.community.topicHour = interaction.options.getInteger("hour", true);
+        guildSettings.community.topicDay = topicDay;
+        guildSettings.community.topicHour = topicHour;
+        if (topicSettingsChanged) {
+          guildSettings.community.topicLastPostedDate = null;
+          weeklyTopicRetryAt.value = 0;
+        }
         saveGuildSettings();
         const weekday = ["日", "月", "火", "水", "木", "金", "土"][guildSettings.community.topicDay];
         await interaction.reply({
           content: `毎週${weekday}曜日 ${guildSettings.community.topicHour}:00（日本時間）に、${channel} へ話題を投稿します。`,        });
+        if (topicSettingsChanged) void announceWeeklyTopicIfDue();
         return;
       }
       if (subcommand === "panel") {
@@ -1594,12 +1735,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
         let panelMessage = existingMessageId
           ? await interaction.channel.messages.fetch(existingMessageId).catch(() => null)
           : null;
-        const updated = Boolean(panelMessage);
-        if (panelMessage) await panelMessage.edit(recruitmentPanelPayload());
-        else {
-          panelMessage = await interaction.channel.send(recruitmentPanelPayload());
-          guildSettings.community.recruitmentPanels[interaction.channelId] = panelMessage.id;
-          saveGuildSettings();
+        let updated = Boolean(panelMessage);
+        if (panelMessage) {
+          try {
+            await panelMessage.edit(recruitmentPanelPayload(interaction.channelId));
+          } catch (error) {
+            if (error.code !== 10008) throw error;
+            panelMessage = null;
+            updated = false;
+          }
+        }
+        if (!panelMessage) {
+          const previousMessageId = guildSettings.community.recruitmentPanels[interaction.channelId] ?? null;
+          const newPanelMessage = await interaction.channel.send(recruitmentPanelPayload(interaction.channelId));
+          guildSettings.community.recruitmentPanels[interaction.channelId] = newPanelMessage.id;
+          try {
+            saveGuildSettings();
+          } catch (error) {
+            if (previousMessageId) guildSettings.community.recruitmentPanels[interaction.channelId] = previousMessageId;
+            else delete guildSettings.community.recruitmentPanels[interaction.channelId];
+            await newPanelMessage.delete().catch(() => {});
+            throw error;
+          }
+          panelMessage = newPanelMessage;
         }
         await interaction.reply({ content: `${updated ? "募集ボタンを更新しました" : "募集作成ボタンを設置しました"}: ${interaction.channel}` });
         return;
@@ -1668,6 +1826,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/leave` を使えます。" });
         return;
       }
+      cancelPendingEmptyVoiceDisconnect();
       queue.clear();
       if (connection) {
         intentionalDisconnects.add(connection);
@@ -1713,7 +1872,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `待ち列: ${queue.size}件`,
         formatEndpointStatus("VOICEVOX Engine", voicevoxStatus),
         formatEndpointStatus("GPT-SoVITS API", gptSovitsStatus),
-        `VCキーワード音声: ${!config.voiceSttEnabled ? "OFF" : voiceSttWorker?.ready ? "稼働中" : "起動中または利用不可"}`,
+        `VCキーワード音声: ${config.voiceKwsEnabled
+          ? voiceKwsWorker?.ready ? "日本語KWS稼働中" : "KWS起動中または利用不可"
+          : !config.voiceSttEnabled ? "OFF" : voiceSttWorker?.ready ? "Whisper稼働中" : "Whisper起動中または利用不可"}`,
         `GPT-SoVITS一時キャッシュ: ${cache.entries}/${cache.maxEntries}件、${cacheMiB}/${(cache.maxBytes / (1024 * 1024)).toFixed(0)} MiB（メモリ内）`,
       ].join("\n");
       await interaction.reply({ content });
@@ -1948,11 +2109,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
         const monthPrefix = `${yearOption}-${String(monthOption).padStart(2, "0")}-`;
+        const seasonChannelChanged = guildSettings.seasonChannelId !== channel.id;
         guildSettings.seasonEntries = [
           ...guildSettings.seasonEntries.filter((entry) => !entry.date.startsWith(monthPrefix)),
           ...importedEntries,
         ].sort((a, b) => a.date.localeCompare(b.date));
         guildSettings.seasonChannelId = channel.id;
+        if (seasonChannelChanged) {
+          guildSettings.seasonLastAnnouncedDate = null;
+          seasonRetryAt.value = 0;
+        }
         saveGuildSettings();
         await interaction.reply({
           content: `${yearOption}年${monthOption}月の予定を${importedEntries.length}日分登録しました。毎日の通知先: <#${channel.id}>`,        });
@@ -1961,9 +2127,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (channelOption) {
+        const seasonChannelChanged = guildSettings.seasonChannelId !== channelOption.id;
         guildSettings.seasonChannelId = channelOption.id;
+        if (seasonChannelChanged) {
+          guildSettings.seasonLastAnnouncedDate = null;
+          seasonRetryAt.value = 0;
+        }
         saveGuildSettings();
         await interaction.reply({ content: `毎日のステージ通知先を <#${channelOption.id}> に設定しました。` });
+        if (seasonChannelChanged) void announceTodaysSeason();
         return;
       }
       if ((yearOption === null) !== (monthOption === null)) {
@@ -2012,18 +2184,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
         const previous = existingIndex >= 0 ? guildSettings.birthdays[existingIndex] : null;
+        const birthdaySettingsChanged = Boolean(previous
+          && (previous.month !== month || previous.day !== day || previous.channelId !== channel.id));
         const birthday = {
           userId: interaction.user.id,
           month,
           day,
           channelId: channel.id,
-          lastAnnouncedYear: previous?.month === month && previous?.day === day ? previous.lastAnnouncedYear ?? null : null,
+          lastAnnouncedYear: previous && !birthdaySettingsChanged ? previous.lastAnnouncedYear ?? null : null,
         };
         if (existingIndex >= 0) guildSettings.birthdays[existingIndex] = birthday;
         else guildSettings.birthdays.push(birthday);
         saveGuildSettings();
         await interaction.reply({
           content: `${month}月${day}日を誕生日として登録しました。お祝いは <#${channel.id}> に日本時間の日付が変わった後に投稿します。`,        });
+        void announceBirthdaysForToday();
         return;
       }
       if (subcommand === "remove") {
@@ -2051,6 +2226,5 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on("error", (error) => console.error("Discord client error:", error));
 await client.login(config.token);
-
 
 

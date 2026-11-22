@@ -12,6 +12,12 @@ def emit(message):
 
 
 def main():
+    # The worker communicates with Node.js through newline-delimited UTF-8 JSON.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="base")
     parser.add_argument("--device", default="cpu")
@@ -41,7 +47,7 @@ def main():
                     best_of=5,
                     temperature=0,
                     condition_on_previous_text=False,
-                    vad_filter=False,
+                    vad_filter=True,
                     no_speech_threshold=0.6,
                     hotwords=request.get("hotwords") or None,
                 )
@@ -69,4 +75,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
