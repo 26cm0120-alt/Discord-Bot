@@ -3,12 +3,35 @@ import { ChannelType, PermissionFlagsBits, REST, Routes, SlashCommandBuilder } f
 
 const admin = PermissionFlagsBits.ManageGuild;
 const commands = [
-  new SlashCommandBuilder().setName("join").setDescription("実行者がいるボイスチャンネルに接続します"),
+  new SlashCommandBuilder().setName("community").setDescription("話題投稿と募集パネルを設定します")
+    .addSubcommand((subcommand) => subcommand.setName("access").setDescription("話題・募集機能を使えるロールを設定します（管理者）")
+      .addRoleOption((option) => option.setName("role").setDescription("使用を許可するロール。省略すると管理者のみになります")))
+    .addSubcommand((subcommand) => subcommand.setName("prompts").setDescription("週次投稿する話題を管理します")
+      .addStringOption((option) => option.setName("action").setDescription("操作").addChoices(
+        { name: "話題を追加", value: "add" }, { name: "一覧を見る", value: "list" }, { name: "話題を削除", value: "remove" },
+      ).setRequired(true))
+      .addStringOption((option) => option.setName("text").setDescription("追加する話題（300文字以内）").setMaxLength(300))
+      .addIntegerOption((option) => option.setName("index").setDescription("一覧に表示された番号").setMinValue(1).setMaxValue(30)))
+    .addSubcommand((subcommand) => subcommand.setName("topics").setDescription("週1回の話題投稿を設定します")
+      .addChannelOption((option) => option.setName("channel").setDescription("話題を投稿するチャンネル").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true))
+      .addIntegerOption((option) => option.setName("day").setDescription("曜日（日本時間）").addChoices(
+        { name: "日曜日", value: 0 }, { name: "月曜日", value: 1 }, { name: "火曜日", value: 2 }, { name: "水曜日", value: 3 },
+        { name: "木曜日", value: 4 }, { name: "金曜日", value: 5 }, { name: "土曜日", value: 6 },
+      ).setRequired(true))
+      .addIntegerOption((option) => option.setName("hour").setDescription("投稿時刻（日本時間の0〜23時）").setMinValue(0).setMaxValue(23).setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName("topics-clear").setDescription("週次話題の自動投稿設定を解除します"))
+    .addSubcommand((subcommand) => subcommand.setName("panel").setDescription("このチャンネルに募集作成ボタンを設置します")),
+  new SlashCommandBuilder()
+    .setName("tournament")
+    .setDescription("3対3のメンバー抽選とトーナメント表を作成します")
+    .addSubcommand((subcommand) => subcommand.setName("create").setDescription("参加受付パネルを投稿します")
+      .addStringOption((option) => option.setName("title").setDescription("イベント名・ゲーム名").setRequired(true).setMaxLength(80))),
+  new SlashCommandBuilder().setName("join").setDescription("VCに接続し、実行チャンネルを読み上げ元にします"),
   new SlashCommandBuilder().setName("help").setDescription("読み上げBotのコマンド一覧を表示します"),
-  new SlashCommandBuilder().setName("leave").setDescription("読み上げを停止して切断します"),
+  new SlashCommandBuilder().setName("leave").setDescription("読み上げを停止して切断します（同じVCの参加者または管理者）"),
   new SlashCommandBuilder().setName("queue").setDescription("読み上げ待ち件数と直近の遅延を表示します"),
   new SlashCommandBuilder().setName("status").setDescription("Bot、音声接続、音声エンジンの状態を確認します"),
-  new SlashCommandBuilder().setName("skip").setDescription("再生中の文章をスキップします"),
+  new SlashCommandBuilder().setName("skip").setDescription("接続中VCの参加者が再生中の文章をスキップします"),
   new SlashCommandBuilder()
     .setName("say")
     .setDescription("入力した文章を読み上げます")
@@ -23,6 +46,8 @@ const commands = [
     .addStringOption((option) => option.setName("speaker").setDescription("話者名・スタイル名で検索して選択").setAutocomplete(true))
     .addNumberOption((option) => option.setName("speed").setDescription("速度（0.5〜2.0、初期値1.0）").setMinValue(0.5).setMaxValue(2.0))
     .addNumberOption((option) => option.setName("pitch").setDescription("高さ（-0.15〜0.15、初期値0）").setMinValue(-0.15).setMaxValue(0.15)),
+  new SlashCommandBuilder().setName("ubw").setDescription("登録されたUBW音声を再生します"),
+  new SlashCommandBuilder().setName("cumulo").setDescription("登録されたキュムロニンバス音声を再生します"),
   new SlashCommandBuilder().setName("voice").setDescription("自分の現在の音声設定を表示します"),
   new SlashCommandBuilder().setName("voices").setDescription("VOICEVOXの話者名一覧をページ表示します")
     .addIntegerOption((option) => option.setName("page").setDescription("表示するページ番号（1ページ15種類）").setMinValue(1)),
@@ -48,15 +73,6 @@ const commands = [
     .addSubcommand((subcommand) => subcommand.setName("remove").setDescription("辞書から単語を削除します")
       .addStringOption((option) => option.setName("word").setDescription("削除する単語").setRequired(true).setMaxLength(80)))
     .addSubcommand((subcommand) => subcommand.setName("list").setDescription("登録済み辞書を表示します"))
-    .setDefaultMemberPermissions(admin),
-  new SlashCommandBuilder()
-    .setName("readch")
-    .setDescription("読み上げ対象チャンネルを管理します（管理者）")
-    .addSubcommand((subcommand) => subcommand.setName("add").setDescription("対象チャンネルを追加します")
-      .addChannelOption((option) => option.setName("channel").setDescription("追加するテキスト/ボイスチャット").addChannelTypes(ChannelType.GuildText, ChannelType.GuildVoice).setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName("remove").setDescription("対象チャンネルを削除します")
-      .addChannelOption((option) => option.setName("channel").setDescription("削除するテキスト/ボイスチャット").addChannelTypes(ChannelType.GuildText, ChannelType.GuildVoice).setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName("list").setDescription("対象チャンネル一覧を表示します"))
     .setDefaultMemberPermissions(admin),
   new SlashCommandBuilder()
     .setName("setting")
