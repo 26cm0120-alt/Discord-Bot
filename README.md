@@ -30,7 +30,7 @@ Node.js の Bot、VOICEVOX Engine、必要に応じて GPT-SoVITS を Windows PC
 - `TTS_PLAYBACK_VOLUME` でVOICEVOX/GPT-SoVITSの読み上げ音量を調整
 - メッセージ本文を保存しない。ログにも本文を出さない
 - VC入退室時にVOICEVOX案内と専用効果音を順番に再生
-- 「好き/like」を `chuayo.mp3`、「やめて/やめろ/stop」を登録済み効果音に置換し、文の前後をVOICEVOXで読み上げ
+- 「好き/like」を `chuayo.mp3`、「やめて/やめろ/stop」を登録済み効果音に置換し、文の前後をVOICEVOXで読み上げ。日本語の合図語は漢字・かなに続く語中の部分一致では置換せず、単独の合図語は従来どおり読み上げます
 - URLモードを`omit`にするとURLは読まず「リンク省略」と案内。画像添付は「画像ファイルが添付されました」、その他の添付は「添付ファイルが送信されました」と案内し、添えられた文章も読む
 - /dict の辞書登録で人名・固有名詞・英字などの読み方を修正
 - `.bot-settings.json` に読み上げチャンネル、入退室通知、URL設定、辞書、誕生日、ステージ予定、話題投稿先、募集記録を保存（Git管理対象外）
@@ -142,4 +142,14 @@ GPT-SoVITS APIをBotと同じPCで起動し、`127.0.0.1:9880`だけにバイン
 
 ## 設定ファイルとトークン
 
-`.env` と `.bot-settings.json` はローカル専用です。Discord Botトークンは `.env` にだけ保存し、GitHubへコミットしないでください。`.env.example` は値の入っていない設定テンプレートです。
+`.env` と設定データはGitHubへコミットしないでください。Discord Botトークンは `.env` にだけ保存します。`.env.example` は値の入っていない設定テンプレートです。
+
+VOICEVOXの `/speakers`、`/audio_query`、`/synthesis` 呼び出しにはタイムアウトがあります。既定は30秒で、`.env` の `VOICEVOX_TIMEOUT_MS` で変更できます。応答しない場合はタイムアウトエラーとして扱い、読み上げ列が無期限に待ち続けないようにしています。
+
+Botの設定データは `BOT_SETTINGS_PATH` で保存先を指定できます。Windowsで直接起動する場合は既定の `.bot-settings.json`、Docker Composeでは `/data/.bot-settings.json` を使い、ホスト側の `data/` に保存します。LinuxでDocker Composeを手動運用する場合は、初回に `docker compose build bot` を実行した後、`docker compose run --rm --no-deps --user root --entrypoint sh bot -c 'chown -R node:node /data'` を実行してから起動してください。GitHub Actionsのデプロイはこの権限設定を行い、`data/` を削除同期から除外します。また、旧コンテナの `/app/.bot-settings.json` があれば、コンテナを再作成する前に `data/` へ移します。
+
+Dockerビルドは `package-lock.json` に固定した依存関係を `npm ci` でインストールします。VOICEVOX EngineはComposeでバージョンを指定します。BotコンテナのヘルスチェックはVOICEVOX Engineの `/version` を確認し、デプロイ処理はさらにDiscordへのログイン成功をログで確認します。CIはpush/PR時に `npm test` とDockerイメージのビルドを実行し、手動デプロイも同じ検証が通ってから開始します。
+
+`docker compose stop` またはホストの終了シグナルを受けると、Botは定期タイマー、読み上げ列、VC接続、音声認識ワーカー、Discord接続を順に終了します。Composeは `init: true` と45秒の終了猶予を設定しています。稼働状態は `docker compose ps`、ログは `docker compose logs -f bot` で確認できます。
+
+設定の保存は一時ファイルからの置き換えで行い、更新前のファイルを `.bak` として同じ保存先に保管します。現在の設定が壊れていてバックアップが読める場合は、壊れたファイルを `.corrupt-日時` として残したうえでバックアップから復旧します。現在の設定とバックアップの両方が読めない場合、初期値で上書きせず起動を止めます。`data/` はGit管理外なので、別媒体への定期バックアップも取ってください。
