@@ -11,36 +11,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-      VPS_HOST: ${{ secrets.VPS_HOST }}
-      VPS_USER: ${{ secrets.VPS_USER }}
-      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
-      CLIENT_ID: ${{ vars.CLIENT_ID }}
-      GUILD_ID: ${{ vars.GUILD_ID }}
-      TEXT_CHANNEL_IDS: ${{ vars.TEXT_CHANNEL_IDS }}
-      VOICEVOX_SPEAKER_ID: ${{ vars.VOICEVOX_SPEAKER_ID }}
-      SUPIKI_TTS_PROVIDER: ${{ vars.SUPIKI_TTS_PROVIDER }}
-      GPT_SOVITS_URL: ${{ vars.GPT_SOVITS_URL }}
-      GPT_SOVITS_REF_AUDIO_PATH: ${{ vars.GPT_SOVITS_REF_AUDIO_PATH }}
-      GPT_SOVITS_REF_TEXT: ${{ vars.GPT_SOVITS_REF_TEXT }}
-      GPT_SOVITS_TIMEOUT_MS: ${{ vars.GPT_SOVITS_TIMEOUT_MS }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.17.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Docker image
+        run: docker build --tag discord-tts-bot:${{ github.sha }} .
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
       - name: Configure SSH
         shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          test -n "$DISCORD_TOKEN"
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_SSH_KEY"
           test -n "$VPS_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/known_hosts" "$HOME/.ssh/id_ed25519"
+
+      - name: Prepare deployment files
+        shell: bash
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          CLIENT_ID: ${{ vars.CLIENT_ID }}
+          GUILD_ID: ${{ vars.GUILD_ID }}
+          TEXT_CHANNEL_IDS: ${{ vars.TEXT_CHANNEL_IDS }}
+          VOICEVOX_TIMEOUT_MS: ${{ vars.VOICEVOX_TIMEOUT_MS }}
+          VOICEVOX_SPEAKER_ID: ${{ vars.VOICEVOX_SPEAKER_ID }}
+          SUPIKI_TTS_PROVIDER: ${{ vars.SUPIKI_TTS_PROVIDER }}
+          GPT_SOVITS_URL: ${{ vars.GPT_SOVITS_URL }}
+          GPT_SOVITS_REF_AUDIO_PATH: ${{ vars.GPT_SOVITS_REF_AUDIO_PATH }}
+          GPT_SOVITS_REF_TEXT: ${{ vars.GPT_SOVITS_REF_TEXT }}
+          GPT_SOVITS_TIMEOUT_MS: ${{ vars.GPT_SOVITS_TIMEOUT_MS }}
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_TOKEN"
           test -n "$CLIENT_ID"
           test -n "$GUILD_ID"
           test -n "$TEXT_CHANNEL_IDS"
@@ -49,36 +81,84 @@ jobs:
             test -n "$GPT_SOVITS_REF_AUDIO_PATH"
             test -n "$GPT_SOVITS_REF_TEXT"
           fi
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-          chmod 600 "$HOME/.ssh/known_hosts" "$HOME/.ssh/id_ed25519"
-
-      - name: Prepare deployment files
-        shell: bash
-        run: |
-          set -euo pipefail
           umask 077
-          printf 'DISCORD_TOKEN=%s\nCLIENT_ID=%s\nGUILD_ID=%s\nTEXT_CHANNEL_IDS=%s\nVOICEVOX_SPEAKER_ID=%s\nSUPIKI_TTS_PROVIDER=%s\nGPT_SOVITS_URL=%s\nGPT_SOVITS_REF_AUDIO_PATH=%s\nGPT_SOVITS_REF_TEXT=%s\nGPT_SOVITS_TIMEOUT_MS=%s\n' \
-            "$DISCORD_TOKEN" "$CLIENT_ID" "$GUILD_ID" "$TEXT_CHANNEL_IDS" "${VOICEVOX_SPEAKER_ID:-1}" \
+          printf 'DISCORD_TOKEN=%s\nCLIENT_ID=%s\nGUILD_ID=%s\nTEXT_CHANNEL_IDS=%s\nVOICEVOX_TIMEOUT_MS=%s\nVOICEVOX_SPEAKER_ID=%s\nSUPIKI_TTS_PROVIDER=%s\nGPT_SOVITS_URL=%s\nGPT_SOVITS_REF_AUDIO_PATH=%s\nGPT_SOVITS_REF_TEXT=%s\nGPT_SOVITS_TIMEOUT_MS=%s\n' \
+            "$DISCORD_TOKEN" "$CLIENT_ID" "$GUILD_ID" "$TEXT_CHANNEL_IDS" "${VOICEVOX_TIMEOUT_MS:-30000}" "${VOICEVOX_SPEAKER_ID:-1}" \
             "${SUPIKI_TTS_PROVIDER:-voicevox}" "${GPT_SOVITS_URL:-}" "${GPT_SOVITS_REF_AUDIO_PATH:-}" \
             "${GPT_SOVITS_REF_TEXT:-}" "${GPT_SOVITS_TIMEOUT_MS:-60000}" \
             > "$RUNNER_TEMP/discord-tts.env"
 
-      - name: Copy files and restart services
+      - name: Copy files, restart services, and check deployment
         shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
           remote="$VPS_USER@$VPS_HOST"
-          ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" 'mkdir -p /opt/discord-tts-bot'
+          ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          app_dir=/opt/discord-tts-bot
+          mkdir -p "$app_dir/data"
+          cd "$app_dir"
+          if [ ! -f data/.bot-settings.json ]; then
+            if [ -f .bot-settings.json ]; then
+              cp .bot-settings.json data/.bot-settings.json.migrate
+              mv data/.bot-settings.json.migrate data/.bot-settings.json
+              echo "Migrated host settings file to persistent data directory."
+            else
+              old_container="$(docker compose ps -q bot 2>/dev/null || true)"
+              if [ -n "$old_container" ]; then
+                running="$(docker inspect -f '{{.State.Running}}' "$old_container")"
+                if [ "$running" != true ]; then
+                  echo "Existing bot container is stopped; refusing to replace it before checking its settings." >&2
+                  exit 1
+                fi
+                if docker exec "$old_container" test -f /app/.bot-settings.json; then
+                  docker cp "$old_container:/app/.bot-settings.json" data/.bot-settings.json.migrate
+                  mv data/.bot-settings.json.migrate data/.bot-settings.json
+                  echo "Migrated existing container settings to persistent data directory."
+                fi
+              fi
+            fi
+          fi
+          REMOTE
           rsync -az --delete \
-            --exclude='.git' --exclude='.env' --exclude='node_modules' --exclude='.bot-settings.json' \
+            --exclude='.git' --exclude='.env' --exclude='node_modules' --exclude='.bot-settings.json' --exclude='data/' \
             -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
             ./ "$remote:/opt/discord-tts-bot/"
           scp -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes \
             "$RUNNER_TEMP/discord-tts.env" "$remote:/opt/discord-tts-bot/.env"
           ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" \
-            'chmod 600 /opt/discord-tts-bot/.env && cd /opt/discord-tts-bot && docker compose up -d --build'
+            'chmod 600 /opt/discord-tts-bot/.env && cd /opt/discord-tts-bot && docker compose build bot && docker compose run --rm --no-deps --user root --entrypoint sh bot -c "chown -R node:node /data && find /data -type f -exec chmod 600 {} +" && docker compose up -d --no-build'
+          ssh -i "$HOME/.ssh/id_ed25519" -o StrictHostKeyChecking=yes "$remote" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/discord-tts-bot
+          bot_id="$(docker compose ps -q bot)"
+          if [ -z "$bot_id" ]; then
+            echo "Botコンテナが見つかりません。" >&2
+            docker compose ps
+            exit 1
+          fi
+          started_at="$(docker inspect -f '{{.State.StartedAt}}' "$bot_id")"
+          for attempt in $(seq 1 45); do
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$bot_id")"
+            if [ "$status" = healthy ] && docker compose logs --since "$started_at" bot | grep -Fq "Bot起動:"; then
+              echo "BotのDiscord接続とVOICEVOX Engineのヘルスチェックが成功しました。"
+              exit 0
+            fi
+            if [ "$status" = unhealthy ]; then
+              echo "Botコンテナのヘルスチェックに失敗しました。" >&2
+              docker compose logs --tail=100 bot >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "制限時間内にBotのDiscord接続とVOICEVOX Engineの応答を確認できませんでした。" >&2
+          docker compose ps >&2
+          docker compose logs --tail=100 bot >&2
+          exit 1
+          REMOTE
 
       - name: Remove temporary credentials
         if: always()

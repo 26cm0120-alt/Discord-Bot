@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomInt } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
@@ -8,7 +8,8 @@ import {
   ChannelType,
   Client,
   Events,
-  GatewayIntentBits,  PermissionFlagsBits,
+  GatewayIntentBits,  MessageFlags,
+  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -17,6 +18,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
+import { replyPrivateError } from "./interaction-replies.js";
 import {
   AudioPlayerStatus,
   EndBehaviorType,
@@ -34,11 +36,14 @@ import { hasHumanVoiceMember } from "./voice-channel-members.js";
 import { getMessageTextForSpeech, markLinksForSpeech } from "./message-speech-filter.js";
 import { splitTextByLanguage } from "./language-segments.js";
 import { formatEndpointStatus, probeEndpoint } from "./engine-health.js";
+import { loadSettings, saveSettings } from "./settings-store.js";
+import { buildSpeechSegments } from "./sound-cues.js";
 
 const config = {
   token: process.env.DISCORD_TOKEN,
   guildId: process.env.GUILD_ID,
   voicevoxUrl: process.env.VOICEVOX_URL ?? "http://127.0.0.1:50021",
+  voicevoxTimeoutMs: Number(process.env.VOICEVOX_TIMEOUT_MS ?? 30000),
   defaultSpeakerId: Number(process.env.VOICEVOX_SPEAKER_ID ?? 1),
   supikiSpeakerId: Number(process.env.SUPIKI_SPEAKER_ID ?? process.env.VOICEVOX_SPEAKER_ID ?? 1),
   supikiTtsProvider: process.env.SUPIKI_TTS_PROVIDER ?? "voicevox",
@@ -92,7 +97,7 @@ if (!config.token || !config.guildId) {
   throw new Error(".env の DISCORD_TOKEN, GUILD_ID を設定してください。");
 }
 
-const settingsPath = resolve(process.cwd(), ".bot-settings.json");
+const settingsPath = resolve(process.env.BOT_SETTINGS_PATH || ".bot-settings.json");
 const defaultSettings = {
   announceVoiceEvents: config.announceVoiceEvents,
   linkSpeechMode: ["omit", "domain", "keep"].includes(config.linkSpeechMode) ? config.linkSpeechMode : "omit",
@@ -115,14 +120,7 @@ const defaultSettings = {
     tournaments: {},
   },
 };
-let savedSettings = {};
-if (existsSync(settingsPath)) {
-  try {
-    savedSettings = JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch (error) {
-    console.error("設定ファイルを読めません。初期値で起動します:", error.message);
-  }
-}
+const savedSettings = loadSettings(settingsPath);
 const guildSettings = {
   ...defaultSettings,
   ...savedSettings,
@@ -157,7 +155,7 @@ if (typeof guildSettings.community.managerRoleId !== "string") guildSettings.com
 function saveGuildSettings() {
   delete guildSettings.textChannelIds;
   delete guildSettings.listeningChannelId;
-  writeFileSync(settingsPath, `${JSON.stringify(guildSettings, null, 2)}\n`, "utf8");
+  saveSettings(settingsPath, guildSettings);
 }
 
 const client = new Client({
@@ -168,7 +166,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
-const tts = new VoicevoxClient(config.voicevoxUrl, config.defaultSpeakerId);
+const tts = new VoicevoxClient(config.voicevoxUrl, config.defaultSpeakerId, { timeoutMs: config.voicevoxTimeoutMs });
 if (!["voicevox", "gpt-sovits"].includes(config.supikiTtsProvider)) {
   throw new Error("SUPIKI_TTS_PROVIDER は voicevox または gpt-sovits を指定してください。");
 }
@@ -263,6 +261,8 @@ const gptSovitsLanguageByUser = new Map(
 let connection = null;
 let activeListeningChannelId = null;
 let emptyVoiceDisconnectTimer = null;
+const runtimeIntervals = new Set();
+let isShuttingDown = false;
 let lastMetric = null;
 const IDLE_SPEECH_THRESHOLD_MS = 30 * 60 * 1000;
 const lastVoiceActivityByUser = new Map();
@@ -376,50 +376,6 @@ function normalizeForSpeech(input) {
   return text.trim().slice(0, config.maxMessageChars);
 }
 
-const soundCuePattern = /ああう\s*あ\s*うああ|お掃除|掃除|ダメ|嫌|かくれんぼ|隠れる|かぼちゃ|パンプキン|好き|(?<![A-Za-z])(?:like(?:s|d)?|liking)(?![A-Za-z])|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|(?<![A-Za-z])stop(?:s|ped|ping)?(?![A-Za-z])/giu;
-const standaloneSoundCuePattern = /^(?:お掃除|掃除|ダメ|嫌|かくれんぼ|隠れる|かぼちゃ|パンプキン|好き|like(?:s|d)?|liking|やめてください|やめてくれ|やめなさい|やめてよ|やめろ|やめて|stop(?:s|ped|ping)?)[\s。.!！?？、,]*$/iu;
-const standalonePhrasePattern = /^ああう\s*あ\s*うああ[\s。.!！?？、,]*$/iu;
-
-function buildSpeechSegments(input) {
-  const text = replaceLinks(input.slice(0, config.maxMessageChars).replace(/\s+/g, " ")).trim();
-  if (standalonePhrasePattern.test(text)) {
-    const clips = voiceClips.phrase.filter((buffer) => buffer.length > 0);
-    return clips.length ? clips.map((buffer) => ({ type: "audio", buffer })) : [{ type: "text", text }];
-  }
-  if (standaloneSoundCuePattern.test(text)) return [{ type: "text", text }];
-  const segments = [];
-  let cursor = 0;
-  for (const match of text.matchAll(soundCuePattern)) {
-    const index = match.index ?? 0;
-    if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
-    const cue = match[0].toLowerCase();
-    if (standalonePhrasePattern.test(match[0])) {
-      if (voiceClips.phrase.length) {
-        segments.push(...voiceClips.phrase.map((buffer) => ({ type: "audio", buffer })));
-      } else {
-        segments.push({ type: "text", text: match[0] });
-      }
-      cursor = index + match[0].length;
-      continue;
-    }
-    const clip = ["お掃除", "掃除"].includes(match[0])
-      ? voiceClips.clean
-      : ["ダメ", "嫌"].includes(match[0])
-        ? voiceClips.dislike
-        : ["かくれんぼ", "隠れる"].includes(match[0])
-          ? voiceClips.hide
-          : ["かぼちゃ", "パンプキン"].includes(match[0])
-            ? voiceClips.pumpkin
-            : cue === "好き" || ["like", "likes", "liked", "liking"].includes(cue)
-              ? voiceClips.like
-              : voiceClips.stop;
-    segments.push(clip?.length ? { type: "audio", buffer: clip } : { type: "text", text: match[0] });
-    cursor = index + match[0].length;
-  }
-  if (cursor < text.length) segments.push({ type: "text", text: text.slice(cursor) });
-  return segments.length ? segments : [{ type: "text", text }];
-}
-
 function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
   const preference = voicePreferencesByUser.get(authorId) ?? {};
   const isSupiki = supikiUsers.has(authorId);
@@ -457,7 +413,15 @@ function enqueueSegments({ segments, authorId, receivedAt = Date.now() }) {
 }
 
 function enqueueText({ text, authorId, receivedAt = Date.now() }) {
-  return enqueueSegments({ segments: buildSpeechSegments(text), authorId, receivedAt });
+  return enqueueSegments({
+    segments: buildSpeechSegments(text, {
+      voiceClips,
+      maxMessageChars: config.maxMessageChars,
+      replaceLinks,
+    }),
+    authorId,
+    receivedAt,
+  });
 }
 
 function getConnectedVoiceChannelId() {
@@ -800,10 +764,10 @@ client.once(Events.ClientReady, (readyClient) => {
   console.log(`入退室通知=${guildSettings.announceVoiceEvents}; URL読み=${guildSettings.linkSpeechMode}`);
   void announceBirthdaysForToday();
   void announceTodaysSeason();
-  setInterval(() => void announceBirthdaysForToday(), 15_000);
-  setInterval(() => void checkVoiceInactivity(), 60_000);
+  runtimeIntervals.add(setInterval(() => void announceBirthdaysForToday(), 15_000));
+  runtimeIntervals.add(setInterval(() => void checkVoiceInactivity(), 60_000));
   void announceWeeklyTopicIfDue();
-  setInterval(() => void announceWeeklyTopicIfDue(), 60_000);
+  runtimeIntervals.add(setInterval(() => void announceWeeklyTopicIfDue(), 60_000));
   scheduleNextSeasonMidnight();
 });
 
@@ -882,14 +846,19 @@ function formatSeasonEntry(entry) {
 }
 
 const seasonRetryAt = { value: 0 };
+let seasonMidnightTimer = null;
+let seasonRetryTimer = null;
 function scheduleNextSeasonMidnight() {
+  if (isShuttingDown) return;
   const { year, month, day } = getJstDateParts();
   const nextJstMidnightUtc = Date.UTC(year, month - 1, day + 1) - 9 * 60 * 60 * 1000;
-  const timer = setTimeout(() => {
+  seasonMidnightTimer = setTimeout(() => {
+    seasonMidnightTimer = null;
+    if (isShuttingDown) return;
     void announceTodaysSeason();
     scheduleNextSeasonMidnight();
   }, Math.max(0, nextJstMidnightUtc - Date.now()));
-  timer.unref?.();
+  seasonMidnightTimer.unref?.();
 }
 
 async function announceTodaysSeason() {
@@ -928,11 +897,13 @@ async function announceTodaysSeason() {
     console.log(`本日のステージローテーションを投稿しました: date=${today}; channel=${guildSettings.seasonChannelId}`);
   } catch (error) {
     console.error("ステージローテーションを投稿できませんでした（1分後に再試行）:", error.message);
-    const retryTimer = setTimeout(() => {
+    seasonRetryTimer = setTimeout(() => {
+      seasonRetryTimer = null;
+      if (isShuttingDown) return;
       seasonRetryAt.value = 0;
       void announceTodaysSeason();
     }, 60_000);
-    retryTimer.unref?.();
+    seasonRetryTimer.unref?.();
   }
 }
 
@@ -1253,17 +1224,17 @@ async function handleCommunityComponent(interaction) {
     const recruitment = guildSettings.community.recruitments[messageId];
     if (!recruitment || recruitment.guildId !== config.guildId) {
       console.warn(JSON.stringify({ event: "recruitment_interaction_missing_state", messageId, action, channelId: interaction.channelId }));
-      await interaction.reply({ content: "この募集情報は見つからないか、期限切れです。" });
+      await replyPrivateError(interaction, "この募集情報は見つからないか、期限切れです。");
       return true;
     }
     if (interaction.channelId !== recruitment.channelId) {
-      await interaction.reply({ content: `この募集は <#${recruitment.channelId}> で操作してください。` });
+      await replyPrivateError(interaction, `この募集は <#${recruitment.channelId}> で操作してください。`);
       return true;
     }
     if (action === "close") {
       const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
       if (interaction.user.id !== recruitment.hostId && !canManage) {
-        await interaction.reply({ content: "募集を締め切れるのは主催者かサーバー管理者です。" });
+        await replyPrivateError(interaction, "募集を締め切れるのは主催者かサーバー管理者です。");
         return true;
       }
       recruitment.closed = true;
@@ -1272,11 +1243,11 @@ async function handleCommunityComponent(interaction) {
       return true;
     }
     if (recruitment.closed) {
-      await interaction.reply({ content: "この募集は締め切られています。" });
+      await replyPrivateError(interaction, "この募集は締め切られています。");
       return true;
     }
     if (interaction.user.id === recruitment.hostId) {
-      await interaction.reply({ content: "主催者はすでに参加者に含まれています。" });
+      await replyPrivateError(interaction, "主催者はすでに参加者に含まれています。");
       return true;
     }
     const participants = recruitment.participants ?? (recruitment.participants = []);
@@ -1289,7 +1260,7 @@ async function handleCommunityComponent(interaction) {
       return true;
     }
     if (participants.length + 1 >= recruitment.capacity) {
-      await interaction.reply({ content: "この募集は満員です。" });
+      await replyPrivateError(interaction, "この募集は満員です。");
       return true;
     }
     participants.push(interaction.user.id);
@@ -1304,17 +1275,17 @@ async function handleCommunityComponent(interaction) {
     const [, , , sourceChannelId] = interaction.customId.split(":");
     const audience = interaction.fields.getTextInputValue("audience").trim();
     if (!["初心者歓迎", "誰でも", "経験者向け"].includes(audience)) {
-      await interaction.reply({ content: "参加しやすさは「初心者歓迎」「誰でも」「経験者向け」から選んで入力してください。" });
+      await replyPrivateError(interaction, "参加しやすさは「初心者歓迎」「誰でも」「経験者向け」から選んで入力してください。");
       return true;
     }
     const capacity = Number(interaction.fields.getTextInputValue("capacity").trim());
     if (!Number.isInteger(capacity) || capacity < 2 || capacity > 99) {
-      await interaction.reply({ content: "募集人数は主催者を含めて2〜99人で入力してください。" });
+      await replyPrivateError(interaction, "募集人数は主催者を含めて2〜99人で入力してください。");
       return true;
     }
     const channel = await client.channels.fetch(sourceChannelId ?? interaction.channelId).catch(() => null);
     if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-      await interaction.reply({ content: "サーバー内のテキストチャンネルから募集を作成してください。" });
+      await replyPrivateError(interaction, "サーバー内のテキストチャンネルから募集を作成してください。");
       return true;
     }
     const recruitment = {
@@ -1360,23 +1331,23 @@ async function handleTournamentComponent(interaction) {
   const tournament = guildSettings.community.tournaments[messageId];
   if (!tournament || tournament.guildId !== config.guildId) {
     console.warn(JSON.stringify({ event: "tournament_interaction_missing_state", messageId, action, channelId: interaction.channelId }));
-    await interaction.reply({ content: "このトーナメントは見つからないか、期限切れです。" });
+    await replyPrivateError(interaction, "このトーナメントは見つからないか、期限切れです。");
     return true;
   }
   if (interaction.channelId !== tournament.channelId) {
-    await interaction.reply({ content: `このトーナメントは <#${tournament.channelId}> で操作してください。` });
+    await replyPrivateError(interaction, `このトーナメントは <#${tournament.channelId}> で操作してください。`);
     return true;
   }
 
   if (action === "join") {
     if (tournament.phase !== "signup") {
-      await interaction.reply({ content: "このトーナメントの参加受付は終了しています。" });
+      await replyPrivateError(interaction, "このトーナメントの参加受付は終了しています。");
       return true;
     }
     const index = tournament.participantIds.indexOf(interaction.user.id);
     if (index >= 0) tournament.participantIds.splice(index, 1);
     else if (tournament.participantIds.length >= MAX_TOURNAMENT_PLAYERS) {
-      await interaction.reply({ content: `参加上限の${MAX_TOURNAMENT_PLAYERS}人に達しています。` });
+      await replyPrivateError(interaction, `参加上限の${MAX_TOURNAMENT_PLAYERS}人に達しています。`);
       return true;
     } else tournament.participantIds.push(interaction.user.id);
     saveGuildSettings();
@@ -1386,17 +1357,17 @@ async function handleTournamentComponent(interaction) {
   }
 
   if (!canManageTournament(interaction, tournament)) {
-    await interaction.reply({ content: "抽選の開始や試合結果を操作できるのは主催者かサーバー管理者です。" });
+    await replyPrivateError(interaction, "抽選の開始や試合結果を操作できるのは主催者かサーバー管理者です。");
     return true;
   }
 
   if (action === "start") {
     if (tournament.phase !== "signup") {
-      await interaction.reply({ content: "このトーナメントはすでに抽選されています。" });
+      await replyPrivateError(interaction, "このトーナメントはすでに抽選されています。");
       return true;
     }
     if (tournament.participantIds.length < 6) {
-      await interaction.reply({ content: "3対3の対戦には6人以上の参加が必要です。" });
+      await replyPrivateError(interaction, "3対3の対戦には6人以上の参加が必要です。");
       return true;
     }
     drawTournament(tournament);
@@ -1407,7 +1378,7 @@ async function handleTournamentComponent(interaction) {
 
   if (action === "reroll") {
     if (tournament.phase !== "running" || tournament.hasPlayedMatch) {
-      await interaction.reply({ content: "再抽選できるのは、試合結果を登録する前だけです。" });
+      await replyPrivateError(interaction, "再抽選できるのは、試合結果を登録する前だけです。");
       return true;
     }
     drawTournament(tournament);
@@ -1418,13 +1389,13 @@ async function handleTournamentComponent(interaction) {
 
   if (action === "win") {
     if (tournament.phase !== "running") {
-      await interaction.reply({ content: "現在、結果を登録できる試合はありません。" });
+      await replyPrivateError(interaction, "現在、結果を登録できる試合はありません。");
       return true;
     }
     const currentRound = tournament.rounds[tournament.currentRoundIndex];
     const match = currentRound?.matches.find((entry) => entry.id === matchId);
     if (!match || match.winnerTeamId || ![match.teamAId, match.teamBId].includes(teamId)) {
-      await interaction.reply({ content: "この試合は終了済みか、結果ボタンが古くなっています。" });
+      await replyPrivateError(interaction, "この試合は終了済みか、結果ボタンが古くなっています。");
       return true;
     }
     match.winnerTeamId = teamId;
@@ -1537,8 +1508,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } catch (error) {
       console.error("コミュニティ機能エラー:", error);
       const content = "処理に失敗しました。Botの権限とチャンネル設定を確認してください。";
-      if (interaction.deferred || interaction.replied) await interaction.followUp({ content }).catch(() => {});
-      else await interaction.reply({ content }).catch(() => {});
+      await replyPrivateError(interaction, content);
     }
     return;
   }
@@ -1568,12 +1538,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (subcommand !== "create") return;
       const channel = interaction.channel;
       if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-        await interaction.reply({ content: "サーバー内のテキストチャンネルで実行してください。" });
+        await replyPrivateError(interaction, "サーバー内のテキストチャンネルで実行してください。");
         return;
       }
       const title = interaction.options.getString("title", true).trim();
       if (!title) {
-        await interaction.reply({ content: "イベント名を入力してください。" });
+        await replyPrivateError(interaction, "イベント名を入力してください。");
         return;
       }
       const tournament = {
@@ -1615,7 +1585,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "access") {
         if (!(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-          await interaction.reply({ content: "使用できるロールを設定できるのはサーバー管理者です。" });
+          await replyPrivateError(interaction, "使用できるロールを設定できるのはサーバー管理者です。");
           return;
         }
         const role = interaction.options.getRole("role");
@@ -1629,7 +1599,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (subcommand === "prompts") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "話題を管理できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
+          await replyPrivateError(interaction, "話題を管理できるのはサーバー管理者または設定された使用ロールのメンバーです。");
           return;
         }
         const action = interaction.options.getString("action", true);
@@ -1637,15 +1607,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (action === "add") {
           const text = interaction.options.getString("text")?.trim();
           if (!text) {
-            await interaction.reply({ content: "追加する話題を text に入力してください。" });
+            await replyPrivateError(interaction, "追加する話題を text に入力してください。");
             return;
           }
           if (topics.length >= 30) {
-            await interaction.reply({ content: "登録できる話題は30件までです。不要な話題を削除してから追加してください。" });
+            await replyPrivateError(interaction, "登録できる話題は30件までです。不要な話題を削除してから追加してください。");
             return;
           }
           if (topics.some((topic) => topic.toLocaleLowerCase() === text.toLocaleLowerCase())) {
-            await interaction.reply({ content: "同じ話題がすでに登録されています。" });
+            await replyPrivateError(interaction, "同じ話題がすでに登録されています。");
             return;
           }
           topics.push(text);
@@ -1656,7 +1626,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (action === "remove") {
           const index = interaction.options.getInteger("index");
           if (!index || index > topics.length) {
-            await interaction.reply({ content: `削除する番号を1〜${topics.length}から選んでください。` });
+            await replyPrivateError(interaction, `削除する番号を1〜${topics.length}から選んでください。`);
             return;
           }
           topics.splice(index - 1, 1);
@@ -1687,7 +1657,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (subcommand === "topics-clear") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "週次話題の設定を解除できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
+          await replyPrivateError(interaction, "週次話題の設定を解除できるのはサーバー管理者または設定された使用ロールのメンバーです。");
           return;
         }
         guildSettings.community.topicChannelId = null;
@@ -1699,12 +1669,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (subcommand === "topics") {
         if (!hasCommunityAccess(interaction)) {
-          await interaction.reply({ content: "話題設定はサーバー管理者または設定された使用ロールのメンバーが実行できます。" });
+          await replyPrivateError(interaction, "話題設定はサーバー管理者または設定された使用ロールのメンバーが実行できます。");
           return;
         }
         const channel = interaction.options.getChannel("channel", true);
         if (!channel.isTextBased() || channel.guildId !== config.guildId) {
-          await interaction.reply({ content: "話題の投稿先にはサーバー内のテキストチャンネルを指定してください。" });
+          await replyPrivateError(interaction, "話題の投稿先にはサーバー内のテキストチャンネルを指定してください。");
           return;
         }
         const topicDay = interaction.options.getInteger("day", true);
@@ -1728,7 +1698,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (subcommand === "panel") {
         if (!interaction.channel?.isTextBased()) {
-          await interaction.reply({ content: "募集ボタンはテキストチャンネルで設置してください。" });
+          await replyPrivateError(interaction, "募集ボタンはテキストチャンネルで設置してください。");
           return;
         }
         const existingMessageId = guildSettings.community.recruitmentPanels[interaction.channelId];
@@ -1791,12 +1761,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "join") {
       const channel = interaction.member.voice?.channel;
       if (!channel) {
-        await interaction.reply({ content: "先にボイスチャンネルに入ってください。" });
+        await replyPrivateError(interaction, "先にボイスチャンネルに入ってください。");
         return;
       }
       const sourceChannel = interaction.channel;
       if (!sourceChannel || ![ChannelType.GuildText, ChannelType.GuildVoice].includes(sourceChannel.type)) {
-        await interaction.reply({ content: "`/join` は聞き専チャンネル、または読み上げたいVC内チャットで実行してください。" });
+        await replyPrivateError(interaction, "`/join` は聞き専チャンネル、または読み上げたいVC内チャットで実行してください。");
         return;
       }
       const sourceChannelId = sourceChannel.id;
@@ -1809,21 +1779,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (connectedChannelId && connectedChannelId !== channel.id
         && !(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-        await interaction.reply({ content: "Botは別のボイスチャンネルで使用中です。接続先を変更できるのはサーバー管理権限を持つメンバーです。" });
+        await replyPrivateError(interaction, "Botは別のボイスチャンネルで使用中です。接続先を変更できるのはサーバー管理権限を持つメンバーです。");
         return;
       }
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await connectTo(channel, sourceChannelId);
       enqueueText({ text: "接続しました。", authorId: interaction.user.id });
       const readSources = activeListeningChannelId ? `VC内チャットと <#${activeListeningChannelId}>` : "接続中VCのチャット";
-      await interaction.editReply(`${channel.name} に接続しました。読み上げ対象: ${readSources}。`);
+      await interaction.deleteReply();
+      await sourceChannel.send({ content: `${channel.name} に接続しました。読み上げ対象: ${readSources}。` });
       return;
     }
 
     if (interaction.commandName === "leave") {
       if ((connection || queue.size > 0) && !isInConnectedVoiceChannel(interaction)
         && !(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/leave` を使えます。" });
+        await replyPrivateError(interaction, "Botが接続中のボイスチャンネルに参加している場合に `/leave` を使えます。");
         return;
       }
       cancelPendingEmptyVoiceDisconnect();
@@ -1883,7 +1854,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "skip") {
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加している場合に `/skip` を使えます。" });
+        await replyPrivateError(interaction, "Botが接続中のボイスチャンネルに参加している場合に `/skip` を使えます。");
         return;
       }
       const skipped = queue.skip();
@@ -1893,50 +1864,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "say") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
+        await replyPrivateError(interaction, "先に `/join` でボイスチャンネルへ接続してください。");
         return;
       }
       const result = enqueueText({ text: interaction.options.getString("text", true), authorId: interaction.user.id });
-      const message = result.accepted ? `読み上げ列に追加しました（${result.position}番目）。` : result.reason === "empty" ? "リンクなどを省略した結果、読み上げる内容がありません。" : "読み上げ列がいっぱいです。少し待ってから試してください。";
-      await interaction.reply({ content: message });
+      if (!result.accepted) {
+        await replyPrivateError(interaction, result.reason === "empty"
+          ? "リンクなどを省略した結果、読み上げる内容がありません。"
+          : "読み上げ列がいっぱいです。少し待ってから試してください。");
+      } else {
+        await interaction.reply({ content: `読み上げ列に追加しました（${result.position}番目）。` });
+      }
       return;
     }
 
     if (interaction.commandName === "cumulo") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
+        await replyPrivateError(interaction, "先に `/join` でボイスチャンネルへ接続してください。");
         return;
       }
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。" });
+        await replyPrivateError(interaction, "Botが接続中のボイスチャンネルに参加してから実行してください。");
         return;
       }
       if (!voiceClips.cumulo?.length) {
-        await interaction.reply({ content: "キュムロニンバス音声が登録されていません。管理者に設定を確認してもらってください。" });
+        await replyPrivateError(interaction, "キュムロニンバス音声が登録されていません。管理者に設定を確認してもらってください。");
         return;
       }
       const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.cumulo, volume: 0.1 }], authorId: interaction.user.id });
-      await interaction.reply({
-        content: result.accepted ? `キュムロニンバス音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",      });
+      if (!result.accepted) await replyPrivateError(interaction, "再生列がいっぱいです。少し待ってから試してください。");
+      else await interaction.reply({ content: `キュムロニンバス音声を再生列に追加しました（${result.position}番目）。` });
       return;
     }
 
     if (interaction.commandName === "ubw") {
       if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-        await interaction.reply({ content: "先に `/join` でボイスチャンネルへ接続してください。" });
+        await replyPrivateError(interaction, "先に `/join` でボイスチャンネルへ接続してください。");
         return;
       }
       if (!isInConnectedVoiceChannel(interaction)) {
-        await interaction.reply({ content: "Botが接続中のボイスチャンネルに参加してから実行してください。" });
+        await replyPrivateError(interaction, "Botが接続中のボイスチャンネルに参加してから実行してください。");
         return;
       }
       if (!voiceClips.ubw?.length) {
-        await interaction.reply({ content: "UBW音声が登録されていません。管理者に設定を確認してもらってください。" });
+        await replyPrivateError(interaction, "UBW音声が登録されていません。管理者に設定を確認してもらってください。");
         return;
       }
       const result = enqueueSegments({ segments: [{ type: "audio", buffer: voiceClips.ubw, volume: 0.1 }], authorId: interaction.user.id });
-      await interaction.reply({
-        content: result.accepted ? `UBW音声を再生列に追加しました（${result.position}番目）。` : "再生列がいっぱいです。少し待ってから試してください。",      });
+      if (!result.accepted) await replyPrivateError(interaction, "再生列がいっぱいです。少し待ってから試してください。");
+      else await interaction.reply({ content: `UBW音声を再生列に追加しました（${result.position}番目）。` });
       return;
     }
 
@@ -1954,7 +1930,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "supiki-language") {
       const language = interaction.options.getString("language", true);
       if (!["auto", "ja", "ko"].includes(language)) {
-        await interaction.reply({ content: "言語は auto、ja、ko から選択してください。" });
+        await replyPrivateError(interaction, "言語は auto、ja、ko から選択してください。");
         return;
       }
       supikiUsers.add(interaction.user.id);
@@ -1972,12 +1948,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const speakerValue = interaction.options.getString("speaker");
       const selectedSpeakerId = speakerValue === null ? null : Number(speakerValue);
       if (speakerValue !== null && (!Number.isInteger(selectedSpeakerId) || selectedSpeakerId < 0)) {
-        await interaction.reply({ content: "話者候補から名前を選んでください。" });
+        await replyPrivateError(interaction, "話者候補から名前を選んでください。");
         return;
       }
       if (interaction.commandName === "speaker") {
         if (selectedSpeakerId === null) {
-          await interaction.reply({ content: "話者名を候補から選んでください。" });
+          await replyPrivateError(interaction, "話者名を候補から選んでください。");
           return;
         }
         preference.speakerId = selectedSpeakerId;
@@ -1985,7 +1961,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const speedScale = interaction.options.getNumber("speed");
         const pitchScale = interaction.options.getNumber("pitch");
         if (selectedSpeakerId === null && speedScale === null && pitchScale === null) {
-          await interaction.reply({ content: "speaker、speed、pitchのいずれかを指定してください。" });
+          await replyPrivateError(interaction, "speaker、speed、pitchのいずれかを指定してください。");
           return;
         }
         if (selectedSpeakerId !== null) preference.speakerId = selectedSpeakerId;
@@ -2014,7 +1990,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const pageCount = Math.max(1, Math.ceil(styles.length / pageSize));
       const page = interaction.options.getInteger("page") ?? 1;
       if (page > pageCount) {
-        await interaction.reply({ content: `ページは1〜${pageCount}で指定してください。` });
+        await replyPrivateError(interaction, `ページは1〜${pageCount}で指定してください。`);
         return;
       }
       const lines = styles.slice((page - 1) * pageSize, page * pageSize).map((style) => `• ${style.label}`);
@@ -2045,7 +2021,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const existing = guildSettings.dictionary.findIndex((entry) => entry.word === word);
       if (existing < 0) {
-        await interaction.reply({ content: `「${word}」は辞書にありません。` });
+        await replyPrivateError(interaction, `「${word}」は辞書にありません。`);
         return;
       }
       guildSettings.dictionary.splice(existing, 1);
@@ -2077,35 +2053,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const canManageCommunity = hasCommunityAccess(interaction);
 
       if (channelOption && !canManage) {
-        await interaction.reply({ content: "通知先を設定できるのはサーバー管理権限を持つメンバーです。" });
+        await replyPrivateError(interaction, "通知先を設定できるのはサーバー管理権限を持つメンバーです。");
         return;
       }
       if (channelOption && !channelOption.isTextBased()) {
-        await interaction.reply({ content: "通知先にはテキストチャンネルを指定してください。" });
+        await replyPrivateError(interaction, "通知先にはテキストチャンネルを指定してください。");
         return;
       }
       if (scheduleText !== null) {
         if (!canManageCommunity) {
-          await interaction.reply({ content: "月間予定を更新できるのはサーバー管理者または設定された使用ロールのメンバーです。" });
+          await replyPrivateError(interaction, "月間予定を更新できるのはサーバー管理者または設定された使用ロールのメンバーです。");
           return;
         }
         if (yearOption === null || monthOption === null) {
-          await interaction.reply({ content: "予定を登録するときは year と month を両方指定してください。" });
+          await replyPrivateError(interaction, "予定を登録するときは year と month を両方指定してください。");
           return;
         }
         const channel = channelOption
           ?? (canManage ? interaction.channel : guildSettings.seasonChannelId ? await client.channels.fetch(guildSettings.seasonChannelId).catch(() => null) : null);
         if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-          await interaction.reply({ content: canManage
+          await replyPrivateError(interaction, canManage
             ? "通知先にできるサーバー内のテキストチャンネルを選んでください。"
-            : "ステージ通知先が未設定です。先に管理者が /season channel で通知先を設定してください。" });
+            : "ステージ通知先が未設定です。先に管理者が /season channel で通知先を設定してください。");
           return;
         }
         let importedEntries;
         try {
           importedEntries = parseSeasonSchedule(scheduleText, yearOption, monthOption);
         } catch (error) {
-          await interaction.reply({ content: `予定を登録できませんでした: ${error.message}` });
+          await replyPrivateError(interaction, `予定を登録できませんでした: ${error.message}`);
           return;
         }
         const monthPrefix = `${yearOption}-${String(monthOption).padStart(2, "0")}-`;
@@ -2139,7 +2115,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       if ((yearOption === null) !== (monthOption === null)) {
-        await interaction.reply({ content: "月間表示では year と month を両方指定するか、両方省略してください。" });
+        await replyPrivateError(interaction, "月間表示では year と month を両方指定するか、両方省略してください。");
         return;
       }
       const currentDate = getJstDateParts();
@@ -2175,12 +2151,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const day = interaction.options.getInteger("day", true);
         const maxDay = new Date(Date.UTC(2024, month, 0)).getUTCDate();
         if (day > maxDay) {
-          await interaction.reply({ content: `${month}月は${maxDay}日までです。` });
+          await replyPrivateError(interaction, `${month}月は${maxDay}日までです。`);
           return;
         }
         const channel = interaction.options.getChannel("channel") ?? interaction.channel;
         if (!channel?.isTextBased() || channel.guildId !== config.guildId) {
-          await interaction.reply({ content: "投稿先にできるサーバー内のテキストチャンネルを選んでください。" });
+          await replyPrivateError(interaction, "投稿先にできるサーバー内のテキストチャンネルを選んでください。");
           return;
         }
         const previous = existingIndex >= 0 ? guildSettings.birthdays[existingIndex] : null;
@@ -2203,7 +2179,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (subcommand === "remove") {
         if (existingIndex < 0) {
-          await interaction.reply({ content: "誕生日は登録されていません。" });
+          await replyPrivateError(interaction, "誕生日は登録されていません。");
           return;
         }
         guildSettings.birthdays.splice(existingIndex, 1);
@@ -2219,12 +2195,57 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (error) {
     console.error("コマンド処理エラー:", error);
     const content = "処理に失敗しました。BotログとVOICEVOX Engineの状態を確認してください。";
-    if (interaction.deferred || interaction.replied) await interaction.followUp({ content });
-    else await interaction.reply({ content });
+    await replyPrivateError(interaction, content);
   }
 });
 
 client.on("error", (error) => console.error("Discord client error:", error));
+
+async function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.info(`終了シグナル ${signal} を受信しました。Botを安全に終了します。`);
+
+  for (const timer of runtimeIntervals) clearInterval(timer);
+  runtimeIntervals.clear();
+  if (seasonMidnightTimer) clearTimeout(seasonMidnightTimer);
+  if (seasonRetryTimer) clearTimeout(seasonRetryTimer);
+  seasonMidnightTimer = null;
+  seasonRetryTimer = null;
+  cancelPendingEmptyVoiceDisconnect();
+
+  queue.clear();
+  if (connection) {
+    intentionalDisconnects.add(connection);
+    connection.destroy();
+    connection = null;
+  }
+  activeListeningChannelId = null;
+  voiceSttWorker?.stop();
+  voiceKwsWorker?.stop();
+
+  try {
+    await client.destroy();
+    console.info("Discord接続と音声ワーカーを終了しました。");
+  } catch (error) {
+    console.error("Botの終了処理中にエラーが発生しました:", error.message);
+    process.exitCode = 1;
+  }
+}
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT").catch((error) => {
+    console.error("SIGINT終了処理に失敗しました:", error);
+    process.exitCode = 1;
+  });
+});
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM").catch((error) => {
+    console.error("SIGTERM終了処理に失敗しました:", error);
+    process.exitCode = 1;
+  });
+});
+
 await client.login(config.token);
 
 

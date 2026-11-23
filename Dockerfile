@@ -1,17 +1,14 @@
-FROM node:24-bookworm-slim
+FROM node:24.17.0-bookworm-slim
 
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY src ./src
 COPY assets ./assets
+RUN mkdir -p /data && chown node:node /data
 USER node
 
 CMD ["node", "src/main.js"]

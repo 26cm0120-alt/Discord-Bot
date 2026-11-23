@@ -9,7 +9,8 @@ logs/
 /assets/gpt-sovits/raw/
 /assets/gpt-sovits/reference/
 
-.bot-settings.json
+.bot-settings.json*
+/data/
 
 # Private, machine-local audio clips; keep the public baseline in voice-clips.json.
 /assets/voice-clips.local.json
