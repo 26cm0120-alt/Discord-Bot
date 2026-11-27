@@ -5,3 +5,7 @@ outputs
 logs
 *.wav
 
+# ローカル専用ファイル（公開イメージへ混ぜない）
+.bot-settings.json*
+data/
+assets/voice-clips.local.json
