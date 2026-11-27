@@ -19,6 +19,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { replyPrivateError } from "./interaction-replies.js";
+import { formatErrorForLog } from "./error-format.js";
 import {
   AudioPlayerStatus,
   EndBehaviorType,
@@ -29,6 +30,7 @@ import {
 } from "@discordjs/voice";
 import { SpeechQueue } from "./queue.js";
 import { VoicevoxClient } from "./voicevox.js";
+import { logVoicevoxConnectionCheck } from "./voicevox-startup.js";
 import { GptSovitsClient } from "./gpt-sovits.js";
 import { VoiceSttWorker } from "./voice-stt.js";
 import { VoiceKwsWorker } from "./voice-kws.js";
@@ -281,7 +283,7 @@ const queue = new SpeechQueue({
     lastMetric = metric;
     console.log(JSON.stringify({ event: "speech_started", ...metric }));
   },
-  onError: (error) => console.error("読み上げエラー:", error.message),
+  onError: (error) => console.error("読み上げエラー:", formatErrorForLog(error)),
 });
 const voiceSttWorker = config.voiceSttEnabled
   ? new VoiceSttWorker({
@@ -759,7 +761,6 @@ async function connectTo(channel, sourceChannelId) {
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Bot起動: ${readyClient.user.tag}; 対象サーバー=${config.guildId}`);
-  console.log(`TTS engine=${config.voicevoxUrl}; /join実行チャンネルと接続VCのチャットを読み上げます`);
   console.log(`Supiki TTS provider=${config.supikiTtsProvider}${config.supikiTtsProvider === "gpt-sovits" ? ` (${config.gptSovitsUrl})` : ""}`);
   console.log(`入退室通知=${guildSettings.announceVoiceEvents}; URL読み=${guildSettings.linkSpeechMode}`);
   void announceBirthdaysForToday();
@@ -2245,6 +2246,9 @@ process.once("SIGTERM", () => {
     process.exitCode = 1;
   });
 });
+
+console.log(`TTS engine=${config.voicevoxUrl}; /join実行チャンネルと接続VCのチャットを読み上げます`);
+await logVoicevoxConnectionCheck(tts);
 
 await client.login(config.token);
 

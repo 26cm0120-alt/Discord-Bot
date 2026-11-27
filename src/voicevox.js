@@ -19,6 +19,16 @@ export class VoicevoxClient {
     return response.json();
   }
 
+  async checkConnection() {
+    // Engine停止中でもBot起動を長時間待たせないよう、確認は最大5秒で打ち切る。
+    const timeoutMs = Math.min(this.timeoutMs, 5000);
+    const response = await this.fetch(`${this.baseUrl}/version`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`VOICEVOX version returned HTTP ${response.status}`);
+    return true;
+  }
+
   async synthesize(text, speakerId = this.defaultSpeakerId, voiceSettings = {}) {
     const key = `${speakerId}\u0000${JSON.stringify(voiceSettings)}\u0000${text}`;
     const cached = cache.get(key);
