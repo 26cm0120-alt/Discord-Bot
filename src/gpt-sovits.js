@@ -166,8 +166,7 @@ export class GptSovitsClient {
       }),
     });
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
-      throw new Error(`GPT-SoVITS /tts returned HTTP ${response.status}: ${detail}`);
+      throw new Error(`GPT-SoVITS /tts returned HTTP ${response.status}`);
     }
     const audio = normalizePcm16Wav(Buffer.from(await response.arrayBuffer()));
     this.audioCache.set(cacheKey, audio);
